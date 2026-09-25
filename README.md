@@ -52,6 +52,13 @@ Some debugs logs notifications can appear at the bottom of the screen. Short cli
 
 I strongly recommend adding a Windows automatic screen shutdown to prevent pixel remaining with OLED TV.
 
+## Troubleshooting
+The Diagnostics tab of the settings window shows whether the PC is listening for the TV, whether the Windows Firewall rule exists and allows the current program, the PC addresses to use on the TV, the connected TVs, the recent connections with the reason each one ended, and the latest log lines. "Copy report" copies all of it to the clipboard.
+
+Logs are written to `%ProgramData%\MagicRemoteService\Logs` (or `%LocalAppData%\MagicRemoteService\Logs` when not running as administrator): `MagicRemoteService-service.log` for the Windows service and `MagicRemoteService-app.log` for the application that handles the TV connections. Warnings and errors also go to the Windows Event Viewer (Application log, source MagicRemoteService). Set the log level to Debug in the Diagnostics tab to log every key press and message; the change applies within a few seconds without restarting.
+
+Once the TV app has been reinstalled from this version, it forwards its own notifications and errors to the PC log (lines starting with `TV`), including the ones that happened while it was disconnected.
+
 ## Updating MagicRemoteService
 After almost all MagicRemoteService updates, for changes to take effect and to prevent compatibility bugs, you need to reinstall the TV app.
 

@@ -77,6 +77,7 @@ namespace MagicRemoteService {
 		public Setting(MagicRemoteService.Service mrs) {
 			this.mrsService = mrs;
 			this.InitializeComponent();
+			this.tabSetting.TabPages.Add(new MagicRemoteService.DiagnosticsPage(this.mrsService));
 			this.libVersion.Text = "v" + System.Reflection.Assembly.GetExecutingAssembly().GetName().Version.ToString();
 			this.dBindControl = new System.Collections.Generic.Dictionary<ushort, BindControl>() {
 				{ 0x0001, this.bcRemoteClick },

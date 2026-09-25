@@ -22,7 +22,43 @@ namespace MagicRemoteService {
 		Unicode = 0x05,
 		Shutdown = 0x06
 	}
+	public sealed class ConnectionInfo {
+		public string Client;
+		public System.DateTime ConnectedAt;
+		public System.DateTime LastMessageAt;
+		public long MessageCount;
+		public bool LogForwarding;
+	}
 	public partial class Service : System.ServiceProcess.ServiceBase {
+		// Connection state of this process, shown in the Diagnostics tab
+		private static readonly System.Collections.Generic.List<MagicRemoteService.ConnectionInfo> liConnection = new System.Collections.Generic.List<MagicRemoteService.ConnectionInfo>();
+		private static readonly System.Collections.Generic.Queue<string> qConnectionHistory = new System.Collections.Generic.Queue<string>();
+		public static MagicRemoteService.ConnectionInfo[] GetConnections() {
+			lock(Service.liConnection) {
+				return Service.liConnection.ToArray();
+			}
+		}
+		public static string[] GetConnectionHistory() {
+			lock(Service.qConnectionHistory) {
+				return Service.qConnectionHistory.ToArray();
+			}
+		}
+		public static string FormatDuration(System.TimeSpan ts) {
+			return (int)ts.TotalHours + ":" + ts.ToString(@"mm\:ss");
+		}
+		private static void AddConnectionHistory(string strEvent) {
+			lock(Service.qConnectionHistory) {
+				Service.qConnectionHistory.Enqueue(System.DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") + " " + strEvent);
+				while(Service.qConnectionHistory.Count > 30) {
+					Service.qConnectionHistory.Dequeue();
+				}
+			}
+		}
+		public ServiceType Type {
+			get {
+				return this.stType;
+			}
+		}
 		private volatile int iPort;
 		private volatile bool bInactivity;
 		private volatile int iTimeoutInactivity;
@@ -61,8 +97,6 @@ namespace MagicRemoteService {
 			{ 0x019D, null }
 		};
 
-		private static readonly System.Diagnostics.EventLog elEventLog = new System.Diagnostics.EventLog("Application", ".", "MagicRemoteService");
-
 		private System.Threading.Thread thrServer;
 		private ServiceType stType;
 
@@ -78,11 +112,6 @@ namespace MagicRemoteService {
 		private static readonly byte[] tabClose = { (0b1000 << 4) | (0x8 << 0), 0x00 };
 		private static readonly byte[] tabPing = { (0b1000 << 4) | (0x9 << 0), 0x00 };
 		private static readonly byte[] tabPingUserInput = { (0b1000 << 4) | (0x9 << 0), 0x01, 0x01 };
-		static Service() {
-			if(!System.Diagnostics.EventLog.SourceExists("MagicRemoteService")) {
-				System.Diagnostics.EventLog.CreateEventSource("MagicRemoteService", "Application");
-			}
-		}
 		public Service() {
 			this.InitializeComponent();
 		}
@@ -402,18 +431,16 @@ namespace MagicRemoteService {
 			}
 		}
 		public static void Log(string sLog) {
-			Service.elEventLog.WriteEntry(sLog, System.Diagnostics.EventLogEntryType.Information);
+			MagicRemoteService.Logger.Write(MagicRemoteService.LogLevel.Information, sLog);
 		}
 		public static void LogIfDebug(string sLog) {
-#if DEBUG
-			Service.Log(sLog);
-#endif
+			MagicRemoteService.Logger.Write(MagicRemoteService.LogLevel.Debug, sLog);
 		}
 		public static void Warn(string sWarn) {
-			Service.elEventLog.WriteEntry(sWarn, System.Diagnostics.EventLogEntryType.Warning);
+			MagicRemoteService.Logger.Write(MagicRemoteService.LogLevel.Warning, sWarn);
 		}
 		public static void Error(string sError) {
-			Service.elEventLog.WriteEntry(sError, System.Diagnostics.EventLogEntryType.Error);
+			MagicRemoteService.Logger.Write(MagicRemoteService.LogLevel.Error, sError);
 		}
 		private static bool SetThreadInputDesktop() {
 			System.IntPtr hInputDesktop = WinApi.User32.OpenInputDesktop(0, true, 0x10000000);
@@ -834,6 +861,62 @@ namespace MagicRemoteService {
 				Service.JoinClientThreads(liClient);
 			}
 		}
+		private static int MessageLength(byte ucType) {
+			switch(ucType) {
+				case (byte)MagicRemoteService.MessageType.PositionRelative:
+				case (byte)MagicRemoteService.MessageType.PositionAbsolute:
+					return 5;
+				case (byte)MagicRemoteService.MessageType.Wheel:
+				case (byte)MagicRemoteService.MessageType.Unicode:
+					return 3;
+				case (byte)MagicRemoteService.MessageType.Visible:
+					return 2;
+				case (byte)MagicRemoteService.MessageType.Key:
+					return 4;
+				default:
+					return 1;
+			}
+		}
+		private static byte[] FrameText(string strText) {
+			byte[] tabText = System.Text.Encoding.UTF8.GetBytes(strText);
+			byte[] tabHeader;
+			if(tabText.Length < 126) {
+				tabHeader = new byte[] { (0b1000 << 4) | (0x1 << 0), (byte)tabText.Length };
+			} else if(tabText.Length <= 0xFFFF) {
+				tabHeader = new byte[] { (0b1000 << 4) | (0x1 << 0), 126, (byte)(tabText.Length >> 8), (byte)tabText.Length };
+			} else {
+				tabHeader = new byte[] { (0b1000 << 4) | (0x1 << 0), 127, 0, 0, 0, 0, (byte)(tabText.Length >> 24), (byte)(tabText.Length >> 16), (byte)(tabText.Length >> 8), (byte)tabText.Length };
+			}
+			byte[] tabFrame = new byte[tabHeader.Length + tabText.Length];
+			System.Buffer.BlockCopy(tabHeader, 0, tabFrame, 0, tabHeader.Length);
+			System.Buffer.BlockCopy(tabText, 0, tabFrame, tabHeader.Length, tabText.Length);
+			return tabFrame;
+		}
+		// Text frames from the TV app carry JSON: {"t":"hello","sdk":version} once connected, then forwarded log messages {"t":"log","l":level,"m":message}.
+		// The PC only sends text frames ({"t":"loglevel","l":level}) after the hello, as older TV apps would show them as a notification.
+		// Returns the message type.
+		private static string ProcessTextMessage(string strMessage, string strClient) {
+			try {
+				using(System.Text.Json.JsonDocument jdMessage = System.Text.Json.JsonDocument.Parse(strMessage)) {
+					System.Text.Json.JsonElement jeRoot = jdMessage.RootElement;
+					string strType = jeRoot.ValueKind == System.Text.Json.JsonValueKind.Object && jeRoot.TryGetProperty("t", out System.Text.Json.JsonElement jeType) && jeType.ValueKind == System.Text.Json.JsonValueKind.String ? jeType.GetString() : null;
+					if(strType == "hello") {
+						Service.Log("TV app on socket " + strClient + " supports log forwarding (webOS SDK " + (jeRoot.TryGetProperty("sdk", out System.Text.Json.JsonElement jeSdk) && jeSdk.ValueKind == System.Text.Json.JsonValueKind.String ? jeSdk.GetString() : "?") + ")");
+						return strType;
+					} else if(strType == "log") {
+						int iLevel = jeRoot.TryGetProperty("l", out System.Text.Json.JsonElement jeLevel) && jeLevel.ValueKind == System.Text.Json.JsonValueKind.Number && jeLevel.TryGetInt32(out int iValue) ? iValue : (int)MagicRemoteService.LogLevel.Information;
+						MagicRemoteService.LogLevel llLevel = (MagicRemoteService.LogLevel)System.Math.Max((int)MagicRemoteService.LogLevel.Error, System.Math.Min((int)MagicRemoteService.LogLevel.Debug, iLevel));
+						string strLog = jeRoot.TryGetProperty("m", out System.Text.Json.JsonElement jeLog) && jeLog.ValueKind == System.Text.Json.JsonValueKind.String ? jeLog.GetString() : "";
+						// Only the TV's warnings and errors go to the Event Log, everything goes to the log file
+						MagicRemoteService.Logger.Write(llLevel, "TV " + strClient + ": " + strLog, llLevel <= MagicRemoteService.LogLevel.Warning);
+						return strType;
+					}
+				}
+			} catch(System.Text.Json.JsonException) {
+			}
+			Service.Warn("Unprocessed text message on socket " + strClient + " [" + strMessage + "]");
+			return null;
+		}
 		private static bool TrySend(System.Net.Sockets.Socket socClient, byte[] tabData, string strClient) {
 			try {
 				socClient.Send(tabData);
@@ -851,7 +934,11 @@ namespace MagicRemoteService {
 			}
 			string strStopReason = "service stopping";
 			bool bClientClosed = false;
-			byte[] tabData = new byte[4096];
+			byte[] tabData = new byte[65536];
+			int iBuffered = 0;
+			int iLogLevelSent = -1;
+			bool bTextCapable = false;
+			MagicRemoteService.ConnectionInfo ciConnection = null;
 			System.Threading.AutoResetEvent areClientReceiveAsyncCompleted = new System.Threading.AutoResetEvent(false);
 			System.Threading.ManualResetEvent mreClientStop = new System.Threading.ManualResetEvent(false);
 			System.Net.Sockets.SocketAsyncEventArgs eaClientReceiveAsync = new System.Net.Sockets.SocketAsyncEventArgs();
@@ -868,6 +955,13 @@ namespace MagicRemoteService {
 				if(!mreClientStop.WaitOne(System.TimeSpan.Zero)) {
 					strStopReason = strReason;
 					mreClientStop.Set();
+				}
+			};
+			// Tell the TV app which of its log messages to forward, so debug traffic is only sent when wanted
+			void SendLogLevel() {
+				int iLevel = (int)MagicRemoteService.Logger.Level;
+				if(bTextCapable && iLevel != iLogLevelSent && Service.TrySend(socClient, Service.FrameText("{\"t\":\"loglevel\",\"l\":" + iLevel + "}"), strClient)) {
+					iLogLevelSent = iLevel;
 				}
 			};
 			void PowerSettingNotificationArrived(WinApi.PowerBroadcastSetting pbs) {
@@ -970,6 +1064,7 @@ namespace MagicRemoteService {
 					AutoReset = true
 				};
 				tPing.Elapsed += delegate (object oSource, System.Timers.ElapsedEventArgs eElapsed) {
+					SendLogLevel();
 					if(Service.TrySend(socClient, Service.tabPing, strClient)) {
 						tPong.Start();
 					} else {
@@ -1184,44 +1279,87 @@ namespace MagicRemoteService {
 					mreClientStop,
 					areClientReceiveAsyncCompleted
 				};
-				switch(System.Threading.WaitHandle.WaitAny(tabEvent, -1, true)) {
-					case 0:
-						break;
-					case 1:
-						break;
-					case 2:
-						if(eaClientReceiveAsync.SocketError != System.Net.Sockets.SocketError.Success) {
-							ClientStop("receive error " + eaClientReceiveAsync.SocketError + " before handshake");
+				bool bHandshake = false;
+				while(!bHandshake && !mreClientStop.WaitOne(System.TimeSpan.Zero)) {
+					switch(System.Threading.WaitHandle.WaitAny(tabEvent, -1, true)) {
+						case 0:
+							ClientStop("service stopping");
 							break;
-						}
-						if(eaClientReceiveAsync.BytesTransferred == 0) {
-							ClientStop("connection closed by TV before handshake");
+						case 1:
 							break;
-						}
-						if(tabData[0] == 'G' && tabData[1] == 'E' && tabData[2] == 'T') {
-							socClient.Send(System.Text.Encoding.UTF8.GetBytes(
-								"HTTP/1.1 101 Switching Protocols\r\n" +
-								"Connection: Upgrade\r\n" +
-								"Upgrade: websocket\r\n" +
-								"Sec-WebSocket-Accept: " + System.Convert.ToBase64String(System.Security.Cryptography.SHA1.Create().ComputeHash(System.Text.Encoding.UTF8.GetBytes(System.Text.RegularExpressions.Regex.Match(System.Text.Encoding.UTF8.GetString(tabData), "Sec-WebSocket-Key: (.*)\r\n").Groups[1].Value + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"))) + "\r\n\r\n"));
+						case 2:
+							if(eaClientReceiveAsync.SocketError != System.Net.Sockets.SocketError.Success) {
+								ClientStop("receive error " + eaClientReceiveAsync.SocketError + " before handshake");
+								break;
+							}
+							if(eaClientReceiveAsync.BytesTransferred == 0) {
+								ClientStop("connection closed by TV before handshake");
+								break;
+							}
+							iBuffered += eaClientReceiveAsync.BytesTransferred;
+							string strRequest = System.Text.Encoding.ASCII.GetString(tabData, 0, iBuffered);
+							if(iBuffered >= 4 && !strRequest.StartsWith("GET ")) {
+								ClientStop("not a WebSocket handshake");
+								Service.Warn("Connexion refused on socket " + strClient + ", not a WebSocket handshake");
+								break;
+							}
+							int iEndRequest = strRequest.IndexOf("\r\n\r\n");
+							if(iEndRequest < 0) {
+								// The request can arrive in several TCP segments
+								if(iBuffered == tabData.Length) {
+									ClientStop("handshake too large");
+									break;
+								}
+								eaClientReceiveAsync.SetBuffer(iBuffered, tabData.Length - iBuffered);
+								if(!socClient.ReceiveAsync(eaClientReceiveAsync)) {
+									ClientReceiveAsyncCompleted(socClient, eaClientReceiveAsync);
+								}
+								break;
+							}
+							strRequest = strRequest.Substring(0, iEndRequest);
+							Service.LogIfDebug("WebSocket handshake on socket " + strClient + ":\r\n" + strRequest);
+							System.Text.RegularExpressions.Match mKey = System.Text.RegularExpressions.Regex.Match(strRequest, @"^Sec-WebSocket-Key:[ \t]*(\S+)[ \t]*\r?$", System.Text.RegularExpressions.RegexOptions.Multiline | System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+							if(!mKey.Success) {
+								ClientStop("handshake without Sec-WebSocket-Key");
+								Service.Warn("Connexion refused on socket " + strClient + ", handshake without Sec-WebSocket-Key");
+								break;
+							}
+							using(System.Security.Cryptography.SHA1 sha1 = System.Security.Cryptography.SHA1.Create()) {
+								socClient.Send(System.Text.Encoding.UTF8.GetBytes(
+									"HTTP/1.1 101 Switching Protocols\r\n" +
+									"Connection: Upgrade\r\n" +
+									"Upgrade: websocket\r\n" +
+									"Sec-WebSocket-Accept: " + System.Convert.ToBase64String(sha1.ComputeHash(System.Text.Encoding.UTF8.GetBytes(mKey.Groups[1].Value + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"))) + "\r\n\r\n"));
+							}
+							bHandshake = true;
 
 							//TODO Something to ask TV if cursor visible
 							Service.Log("Client connected on socket " + strClient);
+							ciConnection = new MagicRemoteService.ConnectionInfo {
+								Client = strClient,
+								ConnectedAt = System.DateTime.Now,
+								LastMessageAt = System.DateTime.Now
+							};
+							lock(Service.liConnection) {
+								Service.liConnection.Add(ciConnection);
+							}
+							Service.AddConnectionHistory("Connected " + strClient);
 							tPing.Start();
 							if(this.bInactivity) {
 								tInactivity.Start();
 							}
-						} else {
-							ClientStop("not a WebSocket handshake");
-							Service.Warn("Connexion refused on socket " + strClient);
-						}
 
-						if(!socClient.ReceiveAsync(eaClientReceiveAsync)) {
-							ClientReceiveAsyncCompleted(socClient, eaClientReceiveAsync);
-						}
-						break;
-					default:
-						throw new System.Exception("Unmanaged handle error");
+							// A client must wait for the handshake response before sending frames, so anything after the request is kept for the frame parser
+							iBuffered -= iEndRequest + 4;
+							System.Buffer.BlockCopy(tabData, iEndRequest + 4, tabData, 0, iBuffered);
+							eaClientReceiveAsync.SetBuffer(iBuffered, tabData.Length - iBuffered);
+							if(!socClient.ReceiveAsync(eaClientReceiveAsync)) {
+								ClientReceiveAsyncCompleted(socClient, eaClientReceiveAsync);
+							}
+							break;
+						default:
+							throw new System.Exception("Unmanaged handle error");
+					}
 				}
 				while(!mreClientStop.WaitOne(System.TimeSpan.Zero)) {
 					switch(System.Threading.WaitHandle.WaitAny(tabEvent, -1, true)) {
@@ -1241,9 +1379,15 @@ namespace MagicRemoteService {
 								ClientStop("connection closed by TV without close frame");
 								break;
 							}
-							ulong ulLenMessage = (ulong)eaClientReceiveAsync.BytesTransferred;
+							iBuffered += eaClientReceiveAsync.BytesTransferred;
+							ulong ulLenMessage = (ulong)iBuffered;
 							ulong ulOffsetFrame = 0;
-							while(!(ulOffsetFrame == ulLenMessage)) {
+							// Only complete frames are processed; a frame split across TCP reads stays in the buffer until the rest arrives
+							while(ulLenMessage - ulOffsetFrame >= 2 && !mreClientStop.WaitOne(System.TimeSpan.Zero)) {
+								ulong ulLenHeader = ((tabData[ulOffsetFrame + 1] & 0b01111111) == 0b01111111 ? 10UL : (tabData[ulOffsetFrame + 1] & 0b01111111) == 0b01111110 ? 4UL : 2UL) + ((tabData[ulOffsetFrame + 1] & 0b10000000) == 0b10000000 ? 4UL : 0UL);
+								if(ulLenMessage - ulOffsetFrame < ulLenHeader) {
+									break;
+								}
 								bool bFin = (tabData[ulOffsetFrame] & 0b10000000) == 0b10000000;
 								bool bRsv1 = (tabData[ulOffsetFrame] & 0b01000000) == 0b01000000;
 								bool bRsv2 = (tabData[ulOffsetFrame] & 0b00100000) == 0b00100000;
@@ -1264,6 +1408,15 @@ namespace MagicRemoteService {
 									ulOffsetMask = ulOffsetFrame + 2;
 								}
 
+								if(ulLenData > (ulong)tabData.Length - ulLenHeader) {
+									ClientStop("frame too large (" + ulLenData + " bytes)");
+									break;
+								}
+								if(ulLenMessage - ulOffsetFrame < ulLenHeader + ulLenData) {
+									break;
+								}
+								ciConnection.LastMessageAt = System.DateTime.Now;
+								System.Threading.Interlocked.Increment(ref ciConnection.MessageCount);
 								ulong ulOffsetData;
 								if(bMask) {
 									ulOffsetData = ulOffsetMask + 4;
@@ -1282,7 +1435,11 @@ namespace MagicRemoteService {
 											break;
 										case (byte)MagicRemoteService.WebSocketOpCode.Text:
 											if(ulLenData != 0) {
-												Service.Warn("Unprocessed text message [" + System.Text.Encoding.UTF8.GetString(tabData, (int)ulOffsetData, (int)ulLenData) + "]");
+												if(Service.ProcessTextMessage(System.Text.Encoding.UTF8.GetString(tabData, (int)ulOffsetData, (int)ulLenData), strClient) == "hello") {
+													bTextCapable = true;
+													ciConnection.LogForwarding = true;
+													SendLogLevel();
+												}
 											}
 											break;
 										case (byte)MagicRemoteService.WebSocketOpCode.Binary:
@@ -1292,7 +1449,9 @@ namespace MagicRemoteService {
 												tInactivity.Stop();
 												tInactivity.Start();
 											}
-											if(ulLenData != 0) {
+											if(ulLenData < (ulong)Service.MessageLength(tabData[ulOffsetData + 0])) {
+												Service.Warn("Truncated binary message [0x" + System.BitConverter.ToString(tabData, (int)ulOffsetData, (int)ulLenData).Replace("-", string.Empty) + "] on socket " + strClient);
+											} else {
 												switch(tabData[ulOffsetData + 0]) {
 													case (byte)MagicRemoteService.MessageType.PositionRelative:
 														piPositionRelative[0].u.mi.dx = System.BitConverter.ToInt16(tabData, (int)ulOffsetData + 1);
@@ -1375,7 +1534,7 @@ namespace MagicRemoteService {
 											break;
 										case (byte)MagicRemoteService.WebSocketOpCode.ConnectionClose:
 											if(bMask) {
-												tabData[ulOffsetFrame + 1] = (byte)((0b10000000 & 0b10000000) | (tabData[ulOffsetFrame] & 0b01111111));
+												tabData[ulOffsetFrame + 1] = (byte)(tabData[ulOffsetFrame + 1] & 0b01111111);
 												for(ulong ul = 0; ul < ulLenData; ul++) {
 													tabData[ulOffsetMask + ul] = tabData[ulOffsetData + ul];
 												}
@@ -1387,7 +1546,7 @@ namespace MagicRemoteService {
 										case (byte)MagicRemoteService.WebSocketOpCode.Ping:
 											tabData[ulOffsetFrame] = (byte)((tabData[ulOffsetFrame] & 0xF0) | (0x0A & 0x0F));
 											if(bMask) {
-												tabData[ulOffsetFrame + 1] = (byte)((0b10000000 & 0b10000000) | (tabData[ulOffsetFrame] & 0b01111111));
+												tabData[ulOffsetFrame + 1] = (byte)(tabData[ulOffsetFrame + 1] & 0b01111111);
 												for(ulong ul = 0; ul < ulLenData; ul++) {
 													tabData[ulOffsetMask + ul] = tabData[ulOffsetData + ul];
 												}
@@ -1424,7 +1583,15 @@ namespace MagicRemoteService {
 								}
 								ulOffsetFrame = ulOffsetData + ulLenData;
 							}
+							if(mreClientStop.WaitOne(System.TimeSpan.Zero)) {
+								break;
+							}
 
+							iBuffered = (int)(ulLenMessage - ulOffsetFrame);
+							if(iBuffered > 0 && ulOffsetFrame > 0) {
+								System.Buffer.BlockCopy(tabData, (int)ulOffsetFrame, tabData, 0, iBuffered);
+							}
+							eaClientReceiveAsync.SetBuffer(iBuffered, tabData.Length - iBuffered);
 							if(!socClient.ReceiveAsync(eaClientReceiveAsync)) {
 								ClientReceiveAsyncCompleted(socClient, eaClientReceiveAsync);
 							}
@@ -1462,6 +1629,14 @@ namespace MagicRemoteService {
 				areClientReceiveAsyncCompleted.Close();
 				mreClientStop.Close();
 				Service.Log("Socket closed " + strClient + " (" + strStopReason + ")");
+				if(ciConnection == null) {
+					Service.AddConnectionHistory("Closed before handshake " + strClient + " (" + strStopReason + ")");
+				} else {
+					lock(Service.liConnection) {
+						Service.liConnection.Remove(ciConnection);
+					}
+					Service.AddConnectionHistory("Disconnected " + strClient + " after " + Service.FormatDuration(System.DateTime.Now - ciConnection.ConnectedAt) + ", " + ciConnection.MessageCount + " messages (" + strStopReason + ")");
+				}
 			}
 		}
 	}

@@ -179,18 +179,84 @@ function ScreenCancel(deScreen, bCursor) {
 	}
 }
 
-function Log() {
-	console.log.apply(console, arguments);
-	Toast(oString.strLogTitle, Array.prototype.slice.call(arguments).map(function(o) {
+function FormatLog(arrArgument) {
+	return Array.prototype.slice.call(arrArgument).map(function(o) {
 		if(typeof o !== "object" || o === null) {
 			return o;
 		} else {
 			return o.toString();
 		}
-	}).join(""));
+	}).join("");
 }
 
-function LogIfDebug() {};
+function LogTitle(strKey, strDefault) {
+	return (oString !== null && oString[strKey]) ? oString[strKey] : strDefault;
+}
+
+// Log messages are also forwarded to the PC as WebSocket text frames so they end up in the PC log file.
+// The PC tells the app which levels it wants (0 error, 1 warning, 2 information, 3 debug); messages logged
+// while disconnected are queued and sent once the connection is open.
+var uiRemoteLogLevel = 2;
+var arrRemoteLog = [];
+var uiFailedOpen = 0;
+function TimeString() {
+	var dNow = new Date();
+	return ("0" + dNow.getHours()).slice(-2) + ":" + ("0" + dNow.getMinutes()).slice(-2) + ":" + ("0" + dNow.getSeconds()).slice(-2);
+}
+function RemoteLog(uiLevel, strMessage) {
+	if(uiLevel > uiRemoteLogLevel) {
+		return;
+	}
+	try {
+		var strText = String(strMessage);
+		if(strText.length > 2000) {
+			strText = strText.slice(0, 2000) + "...";
+		}
+		if(socClient && socClient.readyState === WebSocket.OPEN) {
+			socClient.send(JSON.stringify({
+				t: "log",
+				l: uiLevel,
+				m: strText
+			}));
+		} else {
+			arrRemoteLog.push({
+				t: "log",
+				l: uiLevel,
+				m: "(logged at " + TimeString() + " while disconnected) " + strText
+			});
+			if(arrRemoteLog.length > 100) {
+				arrRemoteLog.shift();
+			}
+		}
+	} catch(eError) {
+		console.error("RemoteLog failure", eError);
+	}
+}
+function RemoteLogFlush() {
+	try {
+		while(arrRemoteLog.length > 0 && socClient && socClient.readyState === WebSocket.OPEN) {
+			var oLog = arrRemoteLog.shift();
+			if(oLog.l <= uiRemoteLogLevel) {
+				socClient.send(JSON.stringify(oLog));
+			}
+		}
+	} catch(eError) {
+		console.error("RemoteLogFlush failure", eError);
+	}
+}
+
+function Log() {
+	console.log.apply(console, arguments);
+	var strMessage = FormatLog(arguments);
+	Toast(LogTitle("strLogTitle", "Log"), strMessage);
+	RemoteLog(2, strMessage);
+}
+
+function LogIfDebug() {
+	if(uiRemoteLogLevel >= 3) {
+		RemoteLog(3, FormatLog(arguments));
+	}
+};
 if(bDebug) {
 	LogIfDebug = function() {
 		Log.apply(this, arguments);
@@ -199,24 +265,16 @@ if(bDebug) {
 
 function Warn() {
 	console.warn.apply(console, arguments);
-	Toast(oString.strWarnTitle, Array.prototype.slice.call(arguments).map(function(o) {
-		if(typeof o !== "object" || o === null) {
-			return o;
-		} else {
-			return o.toString();
-		}
-	}).join(""));
+	var strMessage = FormatLog(arguments);
+	Toast(LogTitle("strWarnTitle", "Warning"), strMessage);
+	RemoteLog(1, strMessage);
 }
 
 function Error() {
 	console.error.apply(console, arguments);
-	Toast(oString.strErrorTitle, Array.prototype.slice.call(arguments).map(function(o) {
-		if(typeof o !== "object" || o === null) {
-			return o;
-		} else {
-			return o.toString();
-		}
-	}).join(""));
+	var strMessage = FormatLog(arguments);
+	Toast(LogTitle("strErrorTitle", "Error"), strMessage);
+	RemoteLog(0, strMessage);
 }
 
 function AppVisible() {};
@@ -633,22 +691,25 @@ function SubscriptionLog() {
 						case 0:
 							if(inResponse.log.bConsole){
 								console.log(inResponse.log.strMessage);
+								RemoteLog(2, "[TV service] " + inResponse.log.strMessage);
 							} else{
-								Log(inResponse.log.strMessage);
+								Log("[TV service] " + inResponse.log.strMessage);
 							}
 							break;
 						case 1:
 							if(inResponse.log.bConsole){
 								console.warn(inResponse.log.strMessage);
+								RemoteLog(1, "[TV service] " + inResponse.log.strMessage);
 							} else{
-								Warn(inResponse.log.strMessage);
+								Warn("[TV service] " + inResponse.log.strMessage);
 							}
 							break;
 						case 2:
 							if(inResponse.log.bConsole){
 								console.error(inResponse.log.strMessage);
+								RemoteLog(0, "[TV service] " + inResponse.log.strMessage);
 							} else{
-								Error(inResponse.log.strMessage);
+								Error("[TV service] " + inResponse.log.strMessage);
 							}
 							break;
 					}
@@ -931,6 +992,19 @@ function SocketOpen() {
 	socClient.binaryType = "arraybuffer";
 	socClient.onopen = function(e) {
 		LogIfDebug(oString.strSocketOpened);
+		e.target.bOpened = true;
+		try {
+			// Announces that this app understands text frames, the PC then sends the log level it wants
+			e.target.send(JSON.stringify({
+				t: "hello",
+				sdk: arrVersion === null ? "" : arrVersion.join(".")
+			}));
+		} catch(eError) {
+			console.error("Hello failure", eError);
+		}
+		RemoteLog(2, "TV app connected to " + strIP + ":" + uiPort + " after " + uiFailedOpen + " failed attempt(s) (webOS SDK " + (arrVersion === null ? "?" : arrVersion.join(".")) + ", input " + strInputId + ", overlay " + bOverlay + ", input direct " + bInputDirect + ")");
+		uiFailedOpen = 0;
+		RemoteLogFlush();
 		SocketOpened();
 		clearInterval(iIntervalRetryOpen);
 		iIntervalRetryOpen = 0;
@@ -946,6 +1020,11 @@ function SocketOpen() {
 	};
 	socClient.onclose = function(e) {
 		LogIfDebug(oString.strSocketClosed);
+		if(e.target.bOpened !== true) {
+			uiFailedOpen++;
+		} else if(e.target === socClient) {
+			RemoteLog(2, "Connection to " + strIP + ":" + uiPort + " closed (code " + e.code + (e.reason ? ", reason " + e.reason : "") + (e.wasClean ? "" : ", not clean") + ")");
+		}
 		if(socClient !== null && !iIntervalRetryOpen) {
 			CursorShowCountIf0();
 			SocketClosed();
@@ -990,7 +1069,16 @@ function SocketOpen() {
 					Error(oString.strActionUnprocessed);
 			}
 		} else {
-			Log(e.data);
+			var oMessage = null;
+			try {
+				oMessage = JSON.parse(e.data);
+			} catch(eError) {
+			}
+			if(oMessage !== null && typeof oMessage === "object" && oMessage.t === "loglevel" && typeof oMessage.l === "number") {
+				uiRemoteLogLevel = oMessage.l;
+			} else {
+				Log(e.data);
+			}
 		}
 	}
 }
