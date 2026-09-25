@@ -7,6 +7,7 @@ namespace MagicRemoteService {
 		private readonly System.Windows.Forms.TextBox tbLog;
 		private readonly System.Windows.Forms.ComboBox cbbLogLevel;
 		private readonly System.Windows.Forms.TextBox tbLogPath;
+		private readonly System.Windows.Forms.CheckBox cbRestrict;
 		private readonly System.Windows.Forms.Timer tRefresh;
 		private bool bRefreshing;
 		private string strLastLog;
@@ -77,17 +78,26 @@ namespace MagicRemoteService {
 			tlpLog.Controls.Add(this.tbLogPath, 2, 0);
 			tlpLog.Controls.Add(btnCopy, 3, 0);
 
+			this.cbRestrict = new System.Windows.Forms.CheckBox {
+				Text = "Only accept connections from the TVs installed from this PC",
+				AutoSize = true,
+				Checked = MagicRemoteService.Service.RestrictToKnownTv
+			};
+			this.cbRestrict.CheckedChanged += this.Restrict_CheckedChanged;
+
 			System.Windows.Forms.TableLayoutPanel tlpMain = new System.Windows.Forms.TableLayoutPanel {
 				Dock = System.Windows.Forms.DockStyle.Fill,
 				ColumnCount = 1,
-				RowCount = 3
+				RowCount = 4
 			};
+			tlpMain.RowStyles.Add(new System.Windows.Forms.RowStyle(System.Windows.Forms.SizeType.AutoSize));
 			tlpMain.RowStyles.Add(new System.Windows.Forms.RowStyle(System.Windows.Forms.SizeType.Percent, 50F));
 			tlpMain.RowStyles.Add(new System.Windows.Forms.RowStyle(System.Windows.Forms.SizeType.AutoSize));
 			tlpMain.RowStyles.Add(new System.Windows.Forms.RowStyle(System.Windows.Forms.SizeType.Percent, 50F));
-			tlpMain.Controls.Add(this.tbStatus, 0, 0);
-			tlpMain.Controls.Add(tlpLog, 0, 1);
-			tlpMain.Controls.Add(this.tbLog, 0, 2);
+			tlpMain.Controls.Add(this.cbRestrict, 0, 0);
+			tlpMain.Controls.Add(this.tbStatus, 0, 1);
+			tlpMain.Controls.Add(tlpLog, 0, 2);
+			tlpMain.Controls.Add(this.tbLog, 0, 3);
 			this.Controls.Add(tlpMain);
 
 			this.tRefresh = new System.Windows.Forms.Timer {
@@ -183,12 +193,20 @@ namespace MagicRemoteService {
 			sb.AppendLine("Port " + iPort + " on this PC: " + DiagnosticsPage.TestPort(iPort));
 			sb.AppendLine("Firewall rule: " + DiagnosticsPage.FirewallStatus());
 			sb.AppendLine("PC addresses for the TV: " + DiagnosticsPage.LocalAddresses());
+			System.Collections.Generic.Dictionary<System.Net.IPAddress, uint> dKnownTv = MagicRemoteService.Service.GetKnownTvs();
+			System.Collections.Generic.List<string> liKnownTv = new System.Collections.Generic.List<string>();
+			foreach(System.Collections.Generic.KeyValuePair<System.Net.IPAddress, uint> kvp in dKnownTv) {
+				liKnownTv.Add(kvp.Key + (kvp.Value == 0 ? " (primary display)" : " (display " + kvp.Value + ")"));
+			}
+			sb.AppendLine("Installed TVs: " + (liKnownTv.Count == 0 ? "none recorded" : string.Join(", ", liKnownTv)));
+			sb.AppendLine("Accepting connections from: " + (MagicRemoteService.Service.RestrictToKnownTv ? "installed TVs only" : "any device on the network"));
+			sb.AppendLine("Expected TV app version: " + MagicRemoteService.Service.AppVersion);
 
 			MagicRemoteService.ConnectionInfo[] arrConnection = MagicRemoteService.Service.GetConnections();
 			sb.AppendLine();
 			sb.AppendLine("Connected TVs: " + (arrConnection.Length == 0 ? "none" : arrConnection.Length.ToString()));
 			foreach(MagicRemoteService.ConnectionInfo ci in arrConnection) {
-				sb.AppendLine("  " + ci.Client + " for " + MagicRemoteService.Service.FormatDuration(System.DateTime.Now - ci.ConnectedAt) + ", " + ci.MessageCount + " messages, last " + (int)(System.DateTime.Now - ci.LastMessageAt).TotalSeconds + "s ago" + (ci.LogForwarding ? "" : ", TV app does not forward its log (reinstall the TV app to enable)"));
+				sb.AppendLine("  " + ci.Client + " for " + MagicRemoteService.Service.FormatDuration(System.DateTime.Now - ci.ConnectedAt) + ", " + ci.MessageCount + " messages, last " + (int)(System.DateTime.Now - ci.LastMessageAt).TotalSeconds + "s ago" + (ci.LogForwarding ? ", TV app " + (string.IsNullOrEmpty(ci.TvAppVersion) ? "version unknown" : ci.TvAppVersion) + (ci.TvAppVersion == MagicRemoteService.Service.AppVersion ? "" : " (reinstall the TV app)") : ", old TV app that does not forward its log (reinstall the TV app)"));
 			}
 			string[] arrHistory = MagicRemoteService.Service.GetConnectionHistory();
 			sb.AppendLine();
@@ -274,6 +292,23 @@ namespace MagicRemoteService {
 					System.Windows.Forms.MessageBox.Show(eException.Message, "Log level", System.Windows.Forms.MessageBoxButtons.OK, System.Windows.Forms.MessageBoxIcon.Error);
 					this.cbbLogLevel.SelectedItem = MagicRemoteService.Logger.Level;
 				}
+			}
+		}
+		private void Restrict_CheckedChanged(object sender, System.EventArgs e) {
+			if(this.cbRestrict.Checked == MagicRemoteService.Service.RestrictToKnownTv) {
+				return;
+			}
+			if(this.cbRestrict.Checked && MagicRemoteService.Service.GetKnownTvs().Count == 0) {
+				System.Windows.Forms.MessageBox.Show("No TV address is recorded yet, every TV would be refused. Install the TV app from the TV tab first.", this.cbRestrict.Text, System.Windows.Forms.MessageBoxButtons.OK, System.Windows.Forms.MessageBoxIcon.Warning);
+				this.cbRestrict.Checked = false;
+				return;
+			}
+			try {
+				MagicRemoteService.Service.RestrictToKnownTv = this.cbRestrict.Checked;
+				MagicRemoteService.Logger.Write(MagicRemoteService.LogLevel.Information, this.cbRestrict.Checked ? "Connections restricted to the installed TVs" : "Connections accepted from any device");
+			} catch(System.Exception eException) {
+				System.Windows.Forms.MessageBox.Show(eException.Message, this.cbRestrict.Text, System.Windows.Forms.MessageBoxButtons.OK, System.Windows.Forms.MessageBoxIcon.Error);
+				this.cbRestrict.Checked = MagicRemoteService.Service.RestrictToKnownTv;
 			}
 		}
 		private void Copy_Click(object sender, System.EventArgs e) {

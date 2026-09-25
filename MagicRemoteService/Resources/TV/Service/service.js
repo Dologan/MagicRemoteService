@@ -8,10 +8,21 @@ Date.prototype.toISOSecondString = function() {
 var Service = require("webos-service");
 var Dgram = require("dgram");
 
-var bDebug = false;
-var bOverlay = true;
-var bExtend = true;
-var strAppId = "com.cathwyler.magicremoteservice";
+// Settings written by the PC when installing the app; the defaults only apply if config.json is missing
+var oConfig = {};
+try {
+	oConfig = require("./config.json");
+} catch(eError) {
+	console.error("config.json not loaded [", eError.message, "]");
+}
+function ConfigValue(strKey, oDefault) {
+	return (Object.prototype.hasOwnProperty.call(oConfig, strKey) && typeof oConfig[strKey] === typeof oDefault) ? oConfig[strKey] : oDefault;
+}
+
+var bDebug = ConfigValue("debug", false);
+var bOverlay = ConfigValue("overlay", true);
+var bExtend = ConfigValue("extend", true);
+var strAppId = ConfigValue("appId", "com.cathwyler.magicremoteservice");
 
 var serService = new Service(strAppId + ".service"); 
 
@@ -226,7 +237,7 @@ metWol.on("request", function(mMessage) {
 });
 
 if(bOverlay){
-	var strInputAppId = "com.webos.app.hdmi";
+	var strInputAppId = ConfigValue("inputAppId", "com.webos.app.hdmi");
 
 	serService.activityManager.create("MagicRemoteServiceKeepAlive");
 

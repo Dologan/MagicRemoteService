@@ -28,6 +28,7 @@ namespace MagicRemoteService {
 		public System.DateTime LastMessageAt;
 		public long MessageCount;
 		public bool LogForwarding;
+		public string TvAppVersion;
 	}
 	public partial class Service : System.ServiceProcess.ServiceBase {
 		// Connection state of this process, shown in the Diagnostics tab
@@ -58,6 +59,74 @@ namespace MagicRemoteService {
 			get {
 				return this.stType;
 			}
+		}
+		private static Microsoft.Win32.RegistryKey RootKey {
+			get {
+				return MagicRemoteService.Program.bElevated ? Microsoft.Win32.Registry.LocalMachine : Microsoft.Win32.Registry.CurrentUser;
+			}
+		}
+		// The TV app version expected by this PC version, the TV app gets it from config.json at install time
+		public static string AppVersion {
+			get {
+				System.Version vAssembly = System.Reflection.Assembly.GetExecutingAssembly().GetName().Version;
+				return vAssembly.Major + "." + vAssembly.Minor + "." + vAssembly.Build;
+			}
+		}
+		// TVs installed from the settings, by address, with the display they control. Addresses are recorded at install time and
+		// whenever the settings window lists the TVs.
+		public static System.Collections.Generic.Dictionary<System.Net.IPAddress, uint> GetKnownTvs() {
+			System.Collections.Generic.Dictionary<System.Net.IPAddress, uint> dKnownTv = new System.Collections.Generic.Dictionary<System.Net.IPAddress, uint>();
+			try {
+				using(Microsoft.Win32.RegistryKey rkMagicRemoteServiceDeviceList = Service.RootKey.OpenSubKey(@"Software\MagicRemoteService\Device")) {
+					if(rkMagicRemoteServiceDeviceList != null) {
+						foreach(string strDevice in rkMagicRemoteServiceDeviceList.GetSubKeyNames()) {
+							using(Microsoft.Win32.RegistryKey rkMagicRemoteServiceDevice = rkMagicRemoteServiceDeviceList.OpenSubKey(strDevice)) {
+								if(rkMagicRemoteServiceDevice != null && System.Net.IPAddress.TryParse(rkMagicRemoteServiceDevice.GetValue("TvIp") as string, out System.Net.IPAddress ipaTv)) {
+									dKnownTv[ipaTv] = (uint)(int)rkMagicRemoteServiceDevice.GetValue("Display", 0);
+								}
+							}
+						}
+					}
+				}
+			} catch(System.Exception eException) {
+				Service.Warn("Unable to read the installed TVs: " + eException.Message);
+			}
+			return dKnownTv;
+		}
+		public static bool RestrictToKnownTv {
+			get {
+				try {
+					using(Microsoft.Win32.RegistryKey rkMagicRemoteService = Service.RootKey.OpenSubKey(@"Software\MagicRemoteService")) {
+						return rkMagicRemoteService != null && (int)rkMagicRemoteService.GetValue("RestrictToKnownTv", 0) != 0;
+					}
+				} catch(System.Exception) {
+					return false;
+				}
+			}
+			set {
+				using(Microsoft.Win32.RegistryKey rkMagicRemoteService = Service.RootKey.CreateSubKey(@"Software\MagicRemoteService")) {
+					rkMagicRemoteService.SetValue("RestrictToKnownTv", value ? 1 : 0, Microsoft.Win32.RegistryValueKind.DWord);
+				}
+			}
+		}
+		private static bool IsClientAllowed(System.Net.Sockets.Socket socClient, out string strReason) {
+			strReason = null;
+			if(!Service.RestrictToKnownTv) {
+				return true;
+			}
+			System.Net.IPAddress ipaClient;
+			try {
+				ipaClient = ((System.Net.IPEndPoint)socClient.RemoteEndPoint).Address;
+			} catch(System.Exception eException) {
+				strReason = "unknown remote address (" + eException.Message + ")";
+				return false;
+			}
+			System.Collections.Generic.Dictionary<System.Net.IPAddress, uint> dKnownTv = Service.GetKnownTvs();
+			if(dKnownTv.ContainsKey(ipaClient)) {
+				return true;
+			}
+			strReason = ipaClient + " is not an installed TV (allowed: " + (dKnownTv.Count == 0 ? "none" : string.Join(", ", dKnownTv.Keys)) + "); if the TV address changed, open the settings to update it";
+			return false;
 		}
 		private volatile int iPort;
 		private volatile bool bInactivity;
@@ -313,6 +382,13 @@ namespace MagicRemoteService {
 					break;
 				case ServiceType.Client:
 					Service.ewhClientStarted.Set();
+					break;
+			}
+			switch(this.stType) {
+				case ServiceType.Both:
+				case ServiceType.Client:
+					// This process is the one that changes the cursor, undo what a crashed previous run left behind
+					MagicRemoteService.SystemCursor.RecoverAfterCrash();
 					break;
 			}
 			Service.mreStop.Reset();
@@ -691,7 +767,11 @@ namespace MagicRemoteService {
 								socClientToSend.Dispose();
 								socClientToSend = null;
 							}
-							if(psServer.IsConnected && Service.ewhClientStarted.WaitOne(System.TimeSpan.Zero) && pClient != null && !pClient.HasExited) {
+							if(!Service.IsClientAllowed(eaServerAcceptAsync.AcceptSocket, out string strRefused)) {
+								Service.Warn("Connection refused: " + strRefused);
+								Service.AddConnectionHistory("Refused " + strRefused);
+								eaServerAcceptAsync.AcceptSocket.Close();
+							} else if(psServer.IsConnected && Service.ewhClientStarted.WaitOne(System.TimeSpan.Zero) && pClient != null && !pClient.HasExited) {
 								Service.WriteSocketInformation(psServer, eaServerAcceptAsync.AcceptSocket.DuplicateAndClose(pClient.Id));
 								Service.ewhServerMessage.Set();
 								eaServerAcceptAsync.AcceptSocket.Dispose();
@@ -885,6 +965,13 @@ namespace MagicRemoteService {
 				Service.JoinClientThreads(liClient);
 			}
 		}
+		private static bool GetLastInputTime(out uint uiLastInput) {
+			WinApi.LastInputInfo lii = new WinApi.LastInputInfo();
+			lii.cbSize = (uint)System.Runtime.InteropServices.Marshal.SizeOf(lii);
+			bool bResult = WinApi.User32.GetLastInputInfo(ref lii);
+			uiLastInput = lii.dwTime;
+			return bResult;
+		}
 		private static int MessageLength(byte ucType) {
 			switch(ucType) {
 				case (byte)MagicRemoteService.MessageType.PositionRelative:
@@ -917,15 +1004,17 @@ namespace MagicRemoteService {
 			return tabFrame;
 		}
 		// Text frames from the TV app carry JSON: {"t":"hello","sdk":version} once connected, then forwarded log messages {"t":"log","l":level,"m":message}.
-		// The PC only sends text frames ({"t":"loglevel","l":level}) after the hello, as older TV apps would show them as a notification.
+		// The PC only sends text frames ({"t":"loglevel","l":level}, {"t":"notice","m":message}) after the hello, as older TV apps would show them as a notification.
 		// Returns the message type.
-		private static string ProcessTextMessage(string strMessage, string strClient) {
+		private static string ProcessTextMessage(string strMessage, string strClient, out string strVersion) {
+			strVersion = null;
 			try {
 				using(System.Text.Json.JsonDocument jdMessage = System.Text.Json.JsonDocument.Parse(strMessage)) {
 					System.Text.Json.JsonElement jeRoot = jdMessage.RootElement;
 					string strType = jeRoot.ValueKind == System.Text.Json.JsonValueKind.Object && jeRoot.TryGetProperty("t", out System.Text.Json.JsonElement jeType) && jeType.ValueKind == System.Text.Json.JsonValueKind.String ? jeType.GetString() : null;
 					if(strType == "hello") {
-						Service.Log("TV app on socket " + strClient + " supports log forwarding (webOS SDK " + (jeRoot.TryGetProperty("sdk", out System.Text.Json.JsonElement jeSdk) && jeSdk.ValueKind == System.Text.Json.JsonValueKind.String ? jeSdk.GetString() : "?") + ")");
+						strVersion = jeRoot.TryGetProperty("v", out System.Text.Json.JsonElement jeVersion) && jeVersion.ValueKind == System.Text.Json.JsonValueKind.String ? jeVersion.GetString() : "";
+						Service.Log("TV app " + (string.IsNullOrEmpty(strVersion) ? "(unknown version)" : strVersion) + " on socket " + strClient + " supports log forwarding (webOS SDK " + (jeRoot.TryGetProperty("sdk", out System.Text.Json.JsonElement jeSdk) && jeSdk.ValueKind == System.Text.Json.JsonValueKind.String ? jeSdk.GetString() : "?") + ")");
 						return strType;
 					} else if(strType == "log") {
 						int iLevel = jeRoot.TryGetProperty("l", out System.Text.Json.JsonElement jeLevel) && jeLevel.ValueKind == System.Text.Json.JsonValueKind.Number && jeLevel.TryGetInt32(out int iValue) ? iValue : (int)MagicRemoteService.LogLevel.Information;
@@ -967,6 +1056,7 @@ namespace MagicRemoteService {
 			System.Threading.ManualResetEvent mreClientStop = new System.Threading.ManualResetEvent(false);
 			System.Net.Sockets.SocketAsyncEventArgs eaClientReceiveAsync = new System.Net.Sockets.SocketAsyncEventArgs();
 			System.Timers.Timer tUserInput = null;
+			uint uiLastInputAtShutdown = 0;
 			System.Timers.Timer tPongUserInput = null;
 			System.Timers.Timer tInactivity = null;
 			System.Timers.Timer tVideoInput = null;
@@ -1010,21 +1100,24 @@ namespace MagicRemoteService {
 			};
 			try {
 				Service.Log("Socket accepted " + strClient);
+				if(!Service.IsClientAllowed(socClient, out string strRefused)) {
+					ClientStop("refused, " + strRefused);
+					Service.Warn("Connection refused: " + strRefused);
+					return;
+				}
 				eaClientReceiveAsync.SetBuffer(tabData, 0, tabData.Length);
 				eaClientReceiveAsync.Completed += ClientReceiveAsyncCompleted;
 				if(!socClient.ReceiveAsync(eaClientReceiveAsync)) {
 					ClientReceiveAsyncCompleted(socClient, eaClientReceiveAsync);
 				}
 
+				// Watches for local user input during a pending shutdown, comparing with the last input time recorded when the shutdown was scheduled
 				tUserInput = new System.Timers.Timer {
-					Interval = 10,
+					Interval = 250,
 					AutoReset = true
 				};
 				tUserInput.Elapsed += delegate (object oSource, System.Timers.ElapsedEventArgs eElapsed) {
-					WinApi.LastInputInfo lii = new WinApi.LastInputInfo();
-					lii.cbSize = (uint)System.Runtime.InteropServices.Marshal.SizeOf(lii);
-					if(!WinApi.User32.GetLastInputInfo(ref lii)) {
-					} else if(((uint)System.Environment.TickCount - lii.dwTime) < 10) {
+					if(Service.GetLastInputTime(out uint uiLastInput) && uiLastInput != uiLastInputAtShutdown) {
 						tUserInput.Stop();
 						if(bClientClosed) {
 							tUserInput.Dispose();
@@ -1279,24 +1372,19 @@ namespace MagicRemoteService {
 				};
 
 				MagicRemoteService.Screen scrDisplay = MagicRemoteService.Screen.PrimaryScreen;
-				System.Threading.Tasks.Task.Run(delegate () {
-					try {
-						System.Net.IPAddress iaClient = ((System.Net.IPEndPoint)socClient.RemoteEndPoint).Address;
-						MagicRemoteService.WebOSCLIDevice wocdClient = System.Array.Find<MagicRemoteService.WebOSCLIDevice>(MagicRemoteService.WebOSCLI.SetupDeviceList(), delegate (MagicRemoteService.WebOSCLIDevice wocd) {
-							return wocd.DeviceInfo.IP.Equals(iaClient);
-						});
-						if(wocdClient == null) {
-							Service.Log("No TV configured with IP " + iaClient + ", using primary display for socket " + strClient);
-						} else {
-							Microsoft.Win32.RegistryKey rkMagicRemoteServiceDevice = (MagicRemoteService.Program.bElevated ? Microsoft.Win32.Registry.LocalMachine : Microsoft.Win32.Registry.CurrentUser).OpenSubKey(@"Software\MagicRemoteService\Device\" + wocdClient.Name);
-							if(rkMagicRemoteServiceDevice != null && MagicRemoteService.Screen.AllScreen.TryGetValue((uint)(int)rkMagicRemoteServiceDevice.GetValue("Display", 0), out MagicRemoteService.Screen scr) && scr.Active) {
-								scrDisplay = scr;
-							}
-						}
-					} catch(System.Exception eException) {
-						Service.Warn("Display lookup failed, using primary display for socket " + strClient + ": " + eException.Message);
+				try {
+					System.Net.IPAddress iaClient = ((System.Net.IPEndPoint)socClient.RemoteEndPoint).Address;
+					if(!Service.GetKnownTvs().TryGetValue(iaClient, out uint uiDisplay)) {
+						Service.Log("TV " + iaClient + " is not recorded, using the primary display for socket " + strClient + " (open the settings to record the installed TVs)");
+					} else if(uiDisplay == 0) {
+					} else if(MagicRemoteService.Screen.AllScreen.TryGetValue(uiDisplay, out MagicRemoteService.Screen scr) && scr.Active) {
+						scrDisplay = scr;
+					} else {
+						Service.Warn("Display " + uiDisplay + " configured for TV " + iaClient + " is not active, using the primary display");
 					}
-				});
+				} catch(System.Exception eException) {
+					Service.Warn("Display lookup failed, using primary display for socket " + strClient + ": " + eException.Message);
+				}
 
 				System.Threading.WaitHandle[] tabEvent = new System.Threading.WaitHandle[] {
 					Service.mreStop,
@@ -1459,9 +1547,15 @@ namespace MagicRemoteService {
 											break;
 										case (byte)MagicRemoteService.WebSocketOpCode.Text:
 											if(ulLenData != 0) {
-												if(Service.ProcessTextMessage(System.Text.Encoding.UTF8.GetString(tabData, (int)ulOffsetData, (int)ulLenData), strClient) == "hello") {
+												if(Service.ProcessTextMessage(System.Text.Encoding.UTF8.GetString(tabData, (int)ulOffsetData, (int)ulLenData), strClient, out string strTvAppVersion) == "hello") {
 													bTextCapable = true;
 													ciConnection.LogForwarding = true;
+													ciConnection.TvAppVersion = strTvAppVersion;
+													if(strTvAppVersion != Service.AppVersion) {
+														string strNotice = "The TV app version (" + (string.IsNullOrEmpty(strTvAppVersion) ? "unknown" : strTvAppVersion) + ") differs from the PC version (" + Service.AppVersion + "), reinstall the TV app from the PC settings";
+														Service.Warn(strNotice + ", socket " + strClient);
+														Service.TrySend(socClient, Service.FrameText("{\"t\":\"notice\",\"m\":" + System.Text.Json.JsonSerializer.Serialize(strNotice) + "}"), strClient);
+													}
 													SendLogLevel();
 												}
 											}
@@ -1588,6 +1682,7 @@ namespace MagicRemoteService {
 														pProcess.StartInfo.Arguments = "/s /t 300";
 														pProcess.StartInfo.WindowStyle = System.Diagnostics.ProcessWindowStyle.Hidden;
 														pProcess.Start();
+														Service.GetLastInputTime(out uiLastInputAtShutdown);
 														tUserInput.Start();
 														Service.LogIfDebug("Pong incativity received on socket " + strClient);
 														break;

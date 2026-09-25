@@ -59,6 +59,11 @@ Logs are written to `%ProgramData%\MagicRemoteService\Logs` (or `%LocalAppData%\
 
 Once the TV app has been reinstalled from this version, it forwards its own notifications and errors to the PC log (lines starting with `TV`), including the ones that happened while it was disconnected.
 
+When the TV app and the PC versions differ, the TV shows a notification and the PC logs a warning: reinstall the TV app from the settings.
+
+## Restricting connections
+By default any device on the network can connect to MagicRemoteService and send keystrokes to the PC. In the Diagnostics tab, "Only accept connections from the TVs installed from this PC" limits connections to the addresses of the TVs installed from the TV tab. The addresses are recorded at installation and refreshed each time the settings window lists the TVs, so if a TV gets a new address, update it in the TV tab (or give the TV a fixed address in your router).
+
 ## Updating MagicRemoteService
 After almost all MagicRemoteService updates, for changes to take effect and to prevent compatibility bugs, you need to reinstall the TV app.
 

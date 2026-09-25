@@ -66,7 +66,13 @@ function readJson(fCallback, strPath) {
 	xhr.send(null);
 }
 
-const bDebug = false;
+// Settings written by the PC when installing the app (config.js, loaded before this file); the defaults only apply if it is missing
+var oConfig = (typeof oMagicRemoteServiceConfig === "object" && oMagicRemoteServiceConfig !== null) ? oMagicRemoteServiceConfig : {};
+function ConfigValue(strKey, oDefault) {
+	return (Object.prototype.hasOwnProperty.call(oConfig, strKey) && typeof oConfig[strKey] === typeof oDefault) ? oConfig[strKey] : oDefault;
+}
+
+const bDebug = ConfigValue("debug", false);
 
 const MessageType = {
 	PositionRelative: 0x00,
@@ -78,18 +84,19 @@ const MessageType = {
 	Shutdown: 0x06
 }
 
-const bInputDirect = true;
-const bOverlay = true;
+const bInputDirect = ConfigValue("inputDirect", true);
+const bOverlay = ConfigValue("overlay", true);
 const uiRemoteEvent = 200;
-const uiLongClick = 1500;
-const strInputId = "HDMI";
-const strInputAppId = "com.webos.app.hdmi";
-const strInputName = "HDMI";
-const strInputSource = "ext://hdmi";
-const strIP = "127.0.0.1";
-const uiPort = 41230;
-const strMask = "255.255.255.0";
-const strMac = "AA:AA:AA:AA:AA:AA";
+const uiLongClick = ConfigValue("longClick", 1500);
+const strInputId = ConfigValue("inputId", "HDMI");
+const strInputAppId = ConfigValue("inputAppId", "com.webos.app.hdmi");
+const strInputName = ConfigValue("inputName", "HDMI");
+const strInputSource = ConfigValue("inputSource", "ext://hdmi");
+const strIP = ConfigValue("ip", "127.0.0.1");
+const uiPort = ConfigValue("port", 41230);
+const strMask = ConfigValue("mask", "255.255.255.0");
+const strMac = ConfigValue("mac", "AA:AA:AA:AA:AA:AA");
+const strAppVersion = ConfigValue("version", "");
 const strBroadcast = strIP.split(".").map(function(x, i) {
 	return(x | (parseInt(strMask.split(".")[i], 10) ^ 0xFF)).toString(10);
 }).join(".");
@@ -100,7 +107,7 @@ const aSensor = {
 	dFactor: 50,
 	dSpeed: 9,
 }
-const strAppId = "com.cathwyler.magicremoteservice";
+const strAppId = ConfigValue("appId", "com.cathwyler.magicremoteservice");
 
 const strPath = webOS.fetchAppRootPath();
 var arrVersion = null;
@@ -1003,6 +1010,7 @@ function SocketOpen() {
 			// Announces that this app understands text frames, the PC then sends the log level it wants
 			e.target.send(JSON.stringify({
 				t: "hello",
+				v: strAppVersion,
 				sdk: arrVersion === null ? "" : arrVersion.join(".")
 			}));
 		} catch(eError) {
@@ -1082,6 +1090,8 @@ function SocketOpen() {
 			}
 			if(oMessage !== null && typeof oMessage === "object" && oMessage.t === "loglevel" && typeof oMessage.l === "number") {
 				uiRemoteLogLevel = oMessage.l;
+			} else if(oMessage !== null && typeof oMessage === "object" && oMessage.t === "notice" && typeof oMessage.m === "string") {
+				Warn(oMessage.m);
 			} else {
 				Log(e.data);
 			}
