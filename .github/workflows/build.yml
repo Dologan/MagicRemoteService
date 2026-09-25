@@ -44,7 +44,8 @@ jobs:
           REF_TYPE: ${{ github.ref_type }}
           REF_NAME: ${{ github.ref_name }}
           RUN_NUMBER: ${{ github.run_number }}
-          SHA: ${{ github.sha }}
+          # On pull requests github.sha is GitHub's temporary merge commit, label with the branch commit instead
+          SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           $strPath = "MagicRemoteService/Properties/AssemblyInfo.cs"
           $strInfo = Get-Content $strPath -Raw
