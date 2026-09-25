@@ -17,13 +17,19 @@ Window.prototype.oneEventListener = function(strType, fListener) {
 Element.prototype.oneEventListener = Window.prototype.oneEventListener;
 Document.prototype.oneEventListener = Window.prototype.oneEventListener;
 
-Object.prototype.spread = function(o) {
-	for(var strProperty in this) {
-		if(strProperty in o) {
-			this[strProperty] = o[strProperty];
+// Non-enumerable, otherwise "spread" would show up in every for...in loop over any object
+Object.defineProperty(Object.prototype, "spread", {
+	value: function(o) {
+		for(var strProperty in this) {
+			if(strProperty in o) {
+				this[strProperty] = o[strProperty];
+			}
 		}
-	}
-};
+	},
+	enumerable: false,
+	writable: true,
+	configurable: true
+});
 
 Object.prototype.toString = function() {
 	const arrAncestor = [];
@@ -270,7 +276,7 @@ function Warn() {
 	RemoteLog(1, strMessage);
 }
 
-function Error() {
+function LogError() {
 	console.error.apply(console, arguments);
 	var strMessage = FormatLog(arguments);
 	Toast(LogTitle("strErrorTitle", "Error"), strMessage);
@@ -393,12 +399,12 @@ function SubscriptionInputStatus() {
 					}
 					break;
 				default:
-					Error(oString.strGetAllInputStatusFailure);
+					LogError(oString.strGetAllInputStatusFailure);
 					break;
 				}
 		},
 		onFailure: function(inError) {
-			Error(oString.strGetAllInputStatusFailure + " [", "(" + typeof inError.errorCode + ")", inError.errorCode, ", ", inError.errorText, "]");
+			LogError(oString.strGetAllInputStatusFailure + " [", "(" + typeof inError.errorCode + ")", inError.errorCode, ", ", inError.errorText, "]");
 			Open();
 		}
 	});
@@ -431,7 +437,7 @@ function SubscriptionScreenSaverRequest() {
 										console.error(oString.strResponseScreenSaverRequestFailure + " [", "(" + typeof inError.errorCode + ")", inError.errorCode, ", ", inError.errorText, "]");
 										break;
 									default:
-										Error(oString.strResponseScreenSaverRequestFailure + " [", "(" + typeof inError.errorCode + ")", inError.errorCode, ", ", inError.errorText, "]");
+										LogError(oString.strResponseScreenSaverRequestFailure + " [", "(" + typeof inError.errorCode + ")", inError.errorCode, ", ", inError.errorText, "]");
 										break;
 								}
 							} 
@@ -442,7 +448,7 @@ function SubscriptionScreenSaverRequest() {
 					LogIfDebug(oString.strRegisterScreenSaverRequestSubscribe);
 					break;
 				default:
-					Error(oString.strRegisterScreenSaverRequestFailure);
+					LogError(oString.strRegisterScreenSaverRequestFailure);
 					break;
 			}
 		}, 
@@ -453,7 +459,7 @@ function SubscriptionScreenSaverRequest() {
 					console.error(oString.strRegisterScreenSaverRequestFailure + " [", "(" + typeof inError.errorCode + ")", inError.errorCode, ", ", inError.errorText, "]");
 					break;
 				default:
-					Error(oString.strRegisterScreenSaverRequestFailure + " [", "(" + typeof inError.errorCode + ")", inError.errorCode, ", ", inError.errorText, "]");
+					LogError(oString.strRegisterScreenSaverRequestFailure + " [", "(" + typeof inError.errorCode + ")", inError.errorCode, ", ", inError.errorText, "]");
 					break;
 			}
 		} 
@@ -479,7 +485,7 @@ function ResetQuaternion() {
 			LogIfDebug(oString.strResetQuaternionSuccess);
 		},
 		onFailure: function (inError) {
-			Error(oString.strResetQuaternionFailure + " [", "(" + typeof inError.errorCode + ")", inError.errorCode, ", ", inError.errorText, "]");
+			LogError(oString.strResetQuaternionFailure + " [", "(" + typeof inError.errorCode + ")", inError.errorCode, ", ", inError.errorText, "]");
 		},
 	});
 }
@@ -601,7 +607,7 @@ function SubscriptionGetSensorData() {
 					LogIfDebug(oString.strGetSensorDataSubscribe);
 					break;
 				default:
-					Error(oString.strGetSensorDataFailure);
+					LogError(oString.strGetSensorDataFailure);
 					break;
 				}
 		},
@@ -631,7 +637,7 @@ function SubscriptionGetSensorData() {
 					}
 					break;
 				default:
-					Error(oString.strGetSensorDataFailure + " [", "(" + typeof inError.errorCode + ")", inError.errorCode, ", ", inError.errorText, "]");
+					LogError(oString.strGetSensorDataFailure + " [", "(" + typeof inError.errorCode + ")", inError.errorCode, ", ", inError.errorText, "]");
 					break;
 			}
 		}
@@ -648,7 +654,7 @@ function LaunchInput() {
 			LogIfDebug(oString.strLaunchSuccess);
 		},
 		onFailure: function(inError) {
-			Error(oString.strLaunchFailure + " [", "(" + typeof inError.errorCode + ")", inError.errorCode, ", ", inError.errorText, "]");
+			LogError(oString.strLaunchFailure + " [", "(" + typeof inError.errorCode + ")", inError.errorCode, ", ", inError.errorText, "]");
 		},
 	});
 }
@@ -668,12 +674,12 @@ function SubscriptionClose() {
 					LogIfDebug(oString.strCloseSubscribe);
 					break;
 				default:
-					Error(oString.strCloseFailure);
+					LogError(oString.strCloseFailure);
 					break;
 			}
 		},
 		onFailure: function(inError) {
-			Error(oString.strCloseFailure + " [", "(" + typeof inError.errorCode + ")", inError.errorCode, ", ", inError.errorText, "]");
+			LogError(oString.strCloseFailure + " [", "(" + typeof inError.errorCode + ")", inError.errorCode, ", ", inError.errorText, "]");
 		},
 	});
 }
@@ -709,7 +715,7 @@ function SubscriptionLog() {
 								console.error(inResponse.log.strMessage);
 								RemoteLog(0, "[TV service] " + inResponse.log.strMessage);
 							} else{
-								Error("[TV service] " + inResponse.log.strMessage);
+								LogError("[TV service] " + inResponse.log.strMessage);
 							}
 							break;
 					}
@@ -718,12 +724,12 @@ function SubscriptionLog() {
 					LogIfDebug(oString.strLogSubscribe);
 					break;
 				default:
-					Error(oString.strLogFailure);
+					LogError(oString.strLogFailure);
 					break;
 			}
 		},
 		onFailure: function(inError) {
-			Error(oString.strLogFailure + " [", "(" + typeof inError.errorCode + ")", inError.errorCode, ", ", inError.errorText, "]");
+			LogError(oString.strLogFailure + " [", "(" + typeof inError.errorCode + ")", inError.errorCode, ", ", inError.errorText, "]");
 		},
 	});
 }
@@ -1066,7 +1072,7 @@ function SocketOpen() {
 					}
 					break;
 				default:
-					Error(oString.strActionUnprocessed);
+					LogError(oString.strActionUnprocessed);
 			}
 		} else {
 			var oMessage = null;
@@ -1089,7 +1095,7 @@ function SocketClose() {
 }
 function Open() {
 	if(socClient !== null) {
-		Error(oString.strSocketErrorOpen);
+		LogError(oString.strSocketErrorOpen);
 	} else {
 		SocketClosed();
 		iIntervalRetryOpen = setInterval(function() {
@@ -1103,7 +1109,7 @@ function Open() {
 }
 function Close() {
 	if(socClient === null) {
-		Error(oString.strSocketErrorClose);
+		LogError(oString.strSocketErrorClose);
 	} else {
 		SocketOpened();
 		if(iIntervalRetryOpen) {
@@ -1136,7 +1142,7 @@ function SendWol(mMac, strBroadcast) {
 			LogIfDebug(oString.strSendWolSuccess + " [0x" + inResponse.strBuffer + "]@" + strBroadcast + ":9 ", mMac);
 		},
 		onFailure: function(inError) {
-			Error(oString.strSendWolFailure + " [", "(" + typeof inError.errorCode + ")", inError.errorCode, ", ", inError.errorText, "]@" + strBroadcast + ":9 ", mMac);
+			LogError(oString.strSendWolFailure + " [", "(" + typeof inError.errorCode + ")", inError.errorCode, ", ", inError.errorText, "]@" + strBroadcast + ":9 ", mMac);
 		}
 	});
 }
@@ -1152,7 +1158,7 @@ function SendPositionRelative(pPositionRelative) {
 			socClient.send(bufPositionRelative);
 			//LogIfDebug(oString.strSendPositionRelativeSuccess + " [0x" + bufPositionRelative.toString(16) + "]@" + strIP + ":" + uiPort + " ", pPositionRelative);
 		} catch(eError) {
-			Error(oString.strSendPositionRelativeFailure + " [", eError, "]@" + strIP + ":" + uiPort + " ", pPositionRelative);
+			LogError(oString.strSendPositionRelativeFailure + " [", eError, "]@" + strIP + ":" + uiPort + " ", pPositionRelative);
 		}
 	}
 }
@@ -1168,7 +1174,7 @@ function SendPositionAbsolute(pPositionAbsolute) {
 			socClient.send(bufPositionAbsolute);
 			//LogIfDebug(oString.strSendPositionAbsoluteSuccess + " [0x" + bufPositionAbsolute.toString(16) + "]@" + strIP + ":" + uiPort + " ", pPositionAbsolute);
 		} catch(eError) {
-			Error(oString.strSendPositionAbsoluteFailure + " [", eError, "]@" + strIP + ":" + uiPort + " ", pPositionAbsolute);
+			LogError(oString.strSendPositionAbsoluteFailure + " [", eError, "]@" + strIP + ":" + uiPort + " ", pPositionAbsolute);
 		}
 	}
 }
@@ -1183,7 +1189,7 @@ function SendWheel(wWheel) {
 			socClient.send(bufWheel);
 			LogIfDebug(oString.strSendWheelSuccess + " [0x" + bufWheel.toString(16) + "]@" + strIP + ":" + uiPort + " ", wWheel);
 		} catch(eError) {
-			Error(oString.strSendWheelFailure + " [", eError, "]@" + strIP + ":" + uiPort + " ", wWheel);
+			LogError(oString.strSendWheelFailure + " [", eError, "]@" + strIP + ":" + uiPort + " ", wWheel);
 		}
 	}
 }
@@ -1198,7 +1204,7 @@ function SendVisible(vVisible) {
 			socClient.send(bufVisible);
 			LogIfDebug(oString.strSendVisibleSuccess + " [0x" + bufVisible.toString(16) + "]@" + strIP + ":" + uiPort + " ", vVisible);
 		} catch(eError) {
-			Error(oString.strSendVisibleFailure + " [", eError, "]@" + strIP + ":" + uiPort + " ", vVisible);
+			LogError(oString.strSendVisibleFailure + " [", eError, "]@" + strIP + ":" + uiPort + " ", vVisible);
 		}
 	}
 }
@@ -1214,7 +1220,7 @@ function SendKey(kKey) {
 			socClient.send(bufKey);
 			LogIfDebug(oString.strSendKeySuccess + " [0x" + bufKey.toString(16) + "]@" + strIP + ":" + uiPort + " ", kKey);
 		} catch(eError) {
-			Error(oString.strSendKeyFailure + " [", eError, "]@" + strIP + ":" + uiPort + " ", kKey);
+			LogError(oString.strSendKeyFailure + " [", eError, "]@" + strIP + ":" + uiPort + " ", kKey);
 		}
 	}
 }
@@ -1229,7 +1235,7 @@ function SendUnicode(kUnicode) {
 			socClient.send(bufUnicode);
 			LogIfDebug(oString.strSendUnicodeSuccess + " [0x" + bufUnicode.toString(16) + "]@" + strIP + ":" + uiPort + " ", kUnicode);
 		} catch(eError) {
-			Error(oString.strSendUnicodeFailure + " [", eError, "]@" + strIP + ":" + uiPort + " ", kUnicode);
+			LogError(oString.strSendUnicodeFailure + " [", eError, "]@" + strIP + ":" + uiPort + " ", kUnicode);
 		}
 	}
 }
@@ -1243,7 +1249,7 @@ function SendShutdown() {
 			socClient.send(bufShutdown);
 			LogIfDebug(oString.strSendShutdownSuccess + " [0x" + bufShutdown.toString(16) + "]@" + strIP + ":" + uiPort);
 		} catch(eError) {
-			Error(oString.strSendShutdownFailure + " [", eError, "]@" + strIP + ":" + uiPort);
+			LogError(oString.strSendShutdownFailure + " [", eError, "]@" + strIP + ":" + uiPort);
 		}
 	}
 }
@@ -1260,7 +1266,7 @@ webOS.service.request("luna://com.webos.service.tv.systemproperty", {
 		Load();
 	},
 	onFailure: function(inError) {
-		throw new Error(inError.errorText);
+		LogError("getSystemInfo failure [", "(" + typeof inError.errorCode + ")", inError.errorCode, ", ", inError.errorText, "]");
 	}
 });
 
@@ -1289,7 +1295,7 @@ webOS.service.request("luna://com.webos.settingsservice", {
 		}, strPath + "/appstring.json");
 	},
 	onFailure: function(inError) {
-		throw new Error(inError.errorText);
+		LogError("getSystemSettings failure [", "(" + typeof inError.errorCode + ")", inError.errorCode, ", ", inError.errorText, "]");
 	}
 });
 

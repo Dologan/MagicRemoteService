@@ -67,6 +67,10 @@ Object.prototype.toString = function() {
 	});
 };
 function SendLog() {
+	// Keep only recent messages while the app is not listening, otherwise they accumulate for as long as the TV is on
+	if(arrLog.length > 200) {
+		arrLog.splice(0, arrLog.length - 200);
+	}
 	try {
 		if(Object.keys(dLog).length > 0){
 			while(arrLog.length > 0) {
@@ -374,6 +378,22 @@ if(bOverlay){
 		SsapLaunch();
 	});
 
+	// A single pending reconnection at a time, whatever combination of error/close/refusal events triggered it
+	var iSsapRelaunchTimeout = null;
+	var uiSsapFailure = 0;
+	function SsapRelaunch(strReason) {
+		if(iSsapRelaunchTimeout === null) {
+			uiSsapFailure++;
+			var uiDelay = Math.min(60000, 5000 * uiSsapFailure);
+			// Logged to the console (and PC log) rather than as a TV notification, as it repeats while it fails
+			ConsoleWarn("Ssap connection lost (", strReason, "), retry ", uiSsapFailure, " in ", uiDelay / 1000, "s");
+			iSsapRelaunchTimeout = setTimeout(function() {
+				iSsapRelaunchTimeout = null;
+				SsapLaunch();
+			}, uiDelay);
+		}
+	}
+
 	function SsapLaunch() {
 		var strSsapWebSocketClientKey = new Buffer("13-" + Date.now()).toString("base64");
 		var haSsapWebSocketShaSum = Crypto.createHash("sha1");
@@ -389,23 +409,46 @@ if(bOverlay){
 				"Sec-WebSocket-Key": strSsapWebSocketClientKey
 			}
 		});
+		// Without these handlers a refused or failed connection to the TV's own SSAP server would crash this service
+		hrSsap.on("error", function(eError) {
+			SsapRelaunch("request error " + eError.message);
+		});
+		hrSsap.on("response", function(imSsap) {
+			imSsap.resume();
+			SsapRelaunch("upgrade refused with HTTP status " + imSsap.statusCode);
+		});
 		hrSsap.end();
 		hrSsap.on("upgrade", function(hsrSsap, socSsap, hSsap) {
+			socSsap.on("error", function(eError) {
+				ConsoleError("Ssap socket error [", eError, "]");
+			});
+			socSsap.on("close", function() {
+				LogIfDebug("Ssap close");
+				SsapRelaunch("socket closed");
+			});
 			if(hsrSsap.headers["sec-websocket-accept"] !== haSsapWebSocketShaSum.digest("base64")) {
-				Error("Ssap invalid server key");
+				if(uiSsapFailure === 0) {
+					Error("Ssap invalid server key");
+				} else {
+					ConsoleError("Ssap invalid server key");
+				}
 				socSsap.end();
 			} else {
+				if(uiSsapFailure > 0) {
+					ConsoleLog("Ssap connected after ", uiSsapFailure, " failure(s)");
+					uiSsapFailure = 0;
+				}
 				socSsap.setTimeout(0);
 				socSsap.setNoDelay(true);
-				socSsap.on("close", function() {
-					LogIfDebug("Ssap close");
-					setTimeout(function() {
-						SsapLaunch();
-					}, 5000);
-				});
+				// Frames split across TCP reads are kept until complete
+				var bufSsapPending = null;
 				socSsap.on("data", function(bufStream) {
 					try{
-						UnframeData(bufStream, function(bufFrame, bFin, bRsv1, bRsv2, bRsv3, ucOpcode, bufMask, bufData) {
+						if(bufSsapPending !== null) {
+							bufStream = Buffer.concat([bufSsapPending, bufStream]);
+							bufSsapPending = null;
+						}
+						var ulConsumed = UnframeData(bufStream, function(bufFrame, bFin, bRsv1, bRsv2, bRsv3, ucOpcode, bufMask, bufData) {
 							if(!bFin) {
 								Error("Ssap unable to process split frame", bufFrame);
 							} else {
@@ -501,6 +544,9 @@ if(bOverlay){
 								}
 							}
 						});
+						if(ulConsumed < bufStream.length) {
+							bufSsapPending = bufStream.slice(ulConsumed);
+						}
 					} catch(eError) {
 						Error("data error [", eError, "]");
 					}
@@ -524,10 +570,11 @@ if(bOverlay){
 		});
 	}
 
+	// Calls fCallback for each complete frame and returns the number of bytes consumed, an incomplete frame at the end is left for the next call
 	function UnframeData(bufStream, fCallback) {
 		var ulLenStream = bufStream.length;
 		var ulOffsetFrame = 0;
-		while(!(ulOffsetFrame == ulLenStream)) {
+		while(ulLenStream - ulOffsetFrame >= 2) {
 			var bFin = (bufStream[ulOffsetFrame] & 0x80) == 0x80;
 			var bRsv1 = (bufStream[ulOffsetFrame] & 0x40) == 0x40;
 			var bRsv2 = (bufStream[ulOffsetFrame] & 0x20) == 0x20;
@@ -535,10 +582,14 @@ if(bOverlay){
 			var ucOpcode = bufStream[ulOffsetFrame] & 0x0F;
 
 			var bMask = (bufStream[ulOffsetFrame + 1] & 0x80) == 0x80;
+			var ulLenHeader = ((bufStream[ulOffsetFrame + 1] & 0x7F) == 0x7F ? 10 : (bufStream[ulOffsetFrame + 1] & 0x7F) == 0x7E ? 4 : 2) + (bMask ? 4 : 0);
+			if(ulLenStream - ulOffsetFrame < ulLenHeader) {
+				break;
+			}
 			var ulLenData;
 			var ulOffsetMask;
 			if((bufStream[ulOffsetFrame + 1] & 0x7F) == 0x7F) {
-				ulLenData = bufStream.readUInt32BE(ulOffsetFrame + 2); //Truncated no 64bit
+				ulLenData = bufStream.readUInt32BE(ulOffsetFrame + 6); //Upper 32 bits ignored, no frame that large
 				ulOffsetMask = ulOffsetFrame + 10;
 			} else if((bufStream[ulOffsetFrame + 1] & 0x7F) == 0x7E) {
 				ulLenData = bufStream.readUInt16BE(ulOffsetFrame + 2);
@@ -546,6 +597,9 @@ if(bOverlay){
 			} else {
 				ulLenData = bufStream[ulOffsetFrame + 1] & 0x7F;
 				ulOffsetMask = ulOffsetFrame + 2;
+			}
+			if(ulLenStream - ulOffsetFrame < ulLenHeader + ulLenData) {
+				break;
 			}
 			var bufMask;
 			var ulOffsetData;
@@ -559,8 +613,9 @@ if(bOverlay){
 			var bufData = bufStream.slice(ulOffsetData, ulOffsetData + ulLenData);
 			var bufFrame = bufStream.slice(ulOffsetFrame, ulOffsetData + ulLenData);
 			fCallback(bufFrame, bFin, bRsv1, bRsv2, bRsv3, ucOpcode, bufMask, bufData);
-			ulOffsetFrame = bufFrame.length;
+			ulOffsetFrame = ulOffsetData + ulLenData;
 		}
+		return ulOffsetFrame;
 	}
 
 	function FrameData(strData, bFin, bRsv1, bRsv2, bRsv3, ucOpcode, ulMask) {

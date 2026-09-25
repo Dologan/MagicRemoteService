@@ -539,6 +539,38 @@ namespace MagicRemoteService {
 				this.ServiceRestartAfterFailure();
 			}
 		}
+		// The accepted socket is handed to the client process over the pipe as one message: options (int32), length (int32), protocol information
+		private static void WriteSocketInformation(System.IO.Stream sPipe, System.Net.Sockets.SocketInformation si) {
+			byte[] tabMessage = new byte[8 + si.ProtocolInformation.Length];
+			System.Buffer.BlockCopy(System.BitConverter.GetBytes((int)si.Options), 0, tabMessage, 0, 4);
+			System.Buffer.BlockCopy(System.BitConverter.GetBytes(si.ProtocolInformation.Length), 0, tabMessage, 4, 4);
+			System.Buffer.BlockCopy(si.ProtocolInformation, 0, tabMessage, 8, si.ProtocolInformation.Length);
+			sPipe.Write(tabMessage, 0, tabMessage.Length);
+			sPipe.Flush();
+		}
+		private static System.Net.Sockets.SocketInformation ReadSocketInformation(System.IO.Stream sPipe) {
+			byte[] tabHeader = Service.ReadExactly(sPipe, 8);
+			int iLength = System.BitConverter.ToInt32(tabHeader, 4);
+			if(iLength <= 0 || iLength > 4096) {
+				throw new System.IO.InvalidDataException("Invalid socket information length " + iLength + " received from the service");
+			}
+			return new System.Net.Sockets.SocketInformation {
+				Options = (System.Net.Sockets.SocketInformationOptions)System.BitConverter.ToInt32(tabHeader, 0),
+				ProtocolInformation = Service.ReadExactly(sPipe, iLength)
+			};
+		}
+		private static byte[] ReadExactly(System.IO.Stream sPipe, int iCount) {
+			byte[] tabData = new byte[iCount];
+			int iRead = 0;
+			while(iRead < iCount) {
+				int i = sPipe.Read(tabData, iRead, iCount - iRead);
+				if(i <= 0) {
+					throw new System.IO.EndOfStreamException("Service pipe closed while receiving a socket");
+				}
+				iRead += i;
+			}
+			return tabData;
+		}
 		private static System.Net.Sockets.Socket CreateListenSocket(int iPort) {
 			System.Net.Sockets.Socket socListen = new System.Net.Sockets.Socket(System.Net.Sockets.AddressFamily.InterNetwork, System.Net.Sockets.SocketType.Stream, System.Net.Sockets.ProtocolType.Tcp);
 			try {
@@ -574,7 +606,6 @@ namespace MagicRemoteService {
 			liClient.Clear();
 		}
 		private void ThreadServerServer() {
-			System.Runtime.Serialization.Formatters.Binary.BinaryFormatter bf = new System.Runtime.Serialization.Formatters.Binary.BinaryFormatter();
 			System.Net.Sockets.Socket socServer = null;
 			System.Threading.AutoResetEvent areServerAcceptAsyncCompleted = new System.Threading.AutoResetEvent(false);
 			System.Net.Sockets.SocketAsyncEventArgs eaServerAcceptAsync = new System.Net.Sockets.SocketAsyncEventArgs();
@@ -642,7 +673,7 @@ namespace MagicRemoteService {
 							pClient.EnableRaisingEvents = true;
 							Service.Log("Client process connected [" + pClient.Id + "]");
 							if(socClientToSend != null) {
-								bf.Serialize(psServer, socClientToSend.DuplicateAndClose(pClient.Id));
+								Service.WriteSocketInformation(psServer, socClientToSend.DuplicateAndClose(pClient.Id));
 								Service.ewhServerMessage.Set();
 								socClientToSend.Dispose();
 								socClientToSend = null;
@@ -661,7 +692,7 @@ namespace MagicRemoteService {
 								socClientToSend = null;
 							}
 							if(psServer.IsConnected && Service.ewhClientStarted.WaitOne(System.TimeSpan.Zero) && pClient != null && !pClient.HasExited) {
-								bf.Serialize(psServer, eaServerAcceptAsync.AcceptSocket.DuplicateAndClose(pClient.Id));
+								Service.WriteSocketInformation(psServer, eaServerAcceptAsync.AcceptSocket.DuplicateAndClose(pClient.Id));
 								Service.ewhServerMessage.Set();
 								eaServerAcceptAsync.AcceptSocket.Dispose();
 							} else {
@@ -787,7 +818,6 @@ namespace MagicRemoteService {
 			}
 		}
 		private void ThreadServerClient() {
-			System.Runtime.Serialization.Formatters.Binary.BinaryFormatter bf = new System.Runtime.Serialization.Formatters.Binary.BinaryFormatter();
 			System.IO.Pipes.NamedPipeClientStream psClient = new System.IO.Pipes.NamedPipeClientStream(".", "{2DCF2389-4969-483D-AA13-58FD8DDDD2D5}", System.IO.Pipes.PipeDirection.In, System.IO.Pipes.PipeOptions.Asynchronous);
 			System.Collections.Generic.List<System.Threading.Thread> liClient = new System.Collections.Generic.List<System.Threading.Thread>();
 			try {
@@ -832,22 +862,16 @@ namespace MagicRemoteService {
 							}
 							break;
 						case 3:
-							switch(bf.Deserialize(psClient)) {
-								case System.Net.Sockets.SocketInformation si:
-									System.Net.Sockets.Socket socClient = new System.Net.Sockets.Socket(si);
+							System.Net.Sockets.Socket socClient = new System.Net.Sockets.Socket(Service.ReadSocketInformation(psClient));
 
-									System.Threading.Thread thrClient = new System.Threading.Thread(delegate () {
-										this.ThreadClient(socClient);
-									});
-									thrClient.Start();
-									liClient.RemoveAll(delegate (System.Threading.Thread thr) {
-										return !thr.IsAlive;
-									});
-									liClient.Add(thrClient);
-									break;
-								default:
-									throw new System.Exception("Communication error");
-							}
+							System.Threading.Thread thrClient = new System.Threading.Thread(delegate () {
+								this.ThreadClient(socClient);
+							});
+							thrClient.Start();
+							liClient.RemoveAll(delegate (System.Threading.Thread thr) {
+								return !thr.IsAlive;
+							});
+							liClient.Add(thrClient);
 							break;
 						default:
 							throw new System.Exception("Unmanaged handle error");
