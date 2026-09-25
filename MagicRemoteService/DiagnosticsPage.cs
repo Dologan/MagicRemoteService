@@ -168,7 +168,7 @@ namespace MagicRemoteService {
 		}
 		private string BuildStatus() {
 			System.Text.StringBuilder sb = new System.Text.StringBuilder();
-			sb.AppendLine("MagicRemoteService v" + System.Reflection.Assembly.GetExecutingAssembly().GetName().Version + " on " + System.Environment.OSVersion + (System.Environment.Is64BitProcess ? " (64-bit process)" : " (32-bit process)"));
+			sb.AppendLine("MagicRemoteService v" + MagicRemoteService.Service.DisplayVersion + " (" + System.Reflection.Assembly.GetExecutingAssembly().GetName().Version + ") on " + System.Environment.OSVersion + (System.Environment.Is64BitProcess ? " (64-bit process)" : " (32-bit process)"));
 			sb.AppendLine("Running as " + System.Security.Principal.WindowsIdentity.GetCurrent().Name + (MagicRemoteService.Program.bElevated ? ", elevated, settings in HKLM" : ", not elevated, settings in HKCU"));
 
 			int iPort = 41230;

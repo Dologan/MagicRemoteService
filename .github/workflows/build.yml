@@ -1,0 +1,127 @@
+name: Build
+
+# master: development build, downloadable from the run's artifacts.
+# Tag vX.Y.Z (pushed, or created with a GitHub release): release build attached to the vX.Y.Z release.
+# Pull requests: build check only.
+on:
+  push:
+    branches: [master]
+    tags: ['v*']
+  pull_request:
+    branches: [master]
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A release created in the GitHub interface triggers both the tag push and the release event, run them one after the other
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: windows-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      label: ${{ steps.version.outputs.label }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Set up NuGet
+        uses: NuGet/setup-nuget@v2
+
+      - name: Determine version
+        id: version
+        shell: pwsh
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+          RUN_NUMBER: ${{ github.run_number }}
+          SHA: ${{ github.sha }}
+        run: |
+          $strPath = "MagicRemoteService/Properties/AssemblyInfo.cs"
+          $strInfo = Get-Content $strPath -Raw
+          if($strInfo -notmatch 'AssemblyVersion\("(\d+)\.(\d+)\.(\d+)\.(\d+)"\)') {
+            throw "AssemblyVersion not found in $strPath"
+          }
+          $strVersion = "$($Matches[1]).$($Matches[2]).$($Matches[3])"
+          if($env:REF_TYPE -eq "tag") {
+            # AssemblyInfo.cs is the single source of the version, the tag must match it
+            if($env:REF_NAME -ne "v$strVersion") {
+              throw "Tag $env:REF_NAME does not match AssemblyVersion $strVersion in $strPath. Update AssemblyVersion, commit, then tag v$strVersion."
+            }
+            $strLabel = $strVersion
+          } else {
+            $strLabel = "$strVersion-dev.$env:RUN_NUMBER+$($env:SHA.Substring(0, 7))"
+          }
+          # Shown in the settings window and the logs, the assembly version used for comparisons is unchanged
+          $strInfo = $strInfo -replace 'AssemblyInformationalVersion\("[^"]*"\)', "AssemblyInformationalVersion(`"$strLabel`")"
+          Set-Content -Path $strPath -Value $strInfo -NoNewline -Encoding utf8BOM
+          "version=$strVersion" >> $env:GITHUB_OUTPUT
+          "label=$strLabel" >> $env:GITHUB_OUTPUT
+          Write-Host "Building MagicRemoteService $strLabel"
+
+      - name: Restore NuGet packages
+        run: nuget restore MagicRemoteService.sln -NonInteractive
+
+      - name: Build
+        run: msbuild MagicRemoteService.sln /p:Configuration=Release "/p:Platform=Any CPU" /m /nologo /clp:Summary
+
+      - name: Package
+        shell: pwsh
+        env:
+          LABEL: ${{ steps.version.outputs.label }}
+        run: |
+          $strName = "MagicRemoteService-$env:LABEL"
+          $strStaging = "dist/$strName"
+          New-Item -ItemType Directory -Force -Path $strStaging | Out-Null
+          Copy-Item "MagicRemoteService/bin/Release/*" $strStaging -Recurse
+          Get-ChildItem $strStaging -Recurse -Include *.pdb | Remove-Item
+          Copy-Item README.md, LICENSE $strStaging
+          Compress-Archive -Path "$strStaging/*" -DestinationPath "dist/$strName.zip"
+          $strHash = (Get-FileHash "dist/$strName.zip" -Algorithm SHA256).Hash.ToLower()
+          "$strHash  $strName.zip" | Set-Content "dist/$strName.zip.sha256" -Encoding ascii
+          Get-ChildItem dist -File | Format-Table Name, Length
+
+      - name: Upload build
+        uses: actions/upload-artifact@v4
+        with:
+          name: MagicRemoteService-${{ steps.version.outputs.label }}
+          path: |
+            dist/*.zip
+            dist/*.sha256
+          if-no-files-found: error
+
+  release:
+    if: github.ref_type == 'tag'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download build
+        uses: actions/download-artifact@v4
+        with:
+          name: MagicRemoteService-${{ needs.build.outputs.label }}
+          path: dist
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            # Release created in the GitHub interface: attach the build to it
+            gh release upload "$TAG" dist/* --clobber
+          else
+            gh release create "$TAG" dist/* --verify-tag --title "MagicRemoteService $VERSION" --generate-notes
+          fi

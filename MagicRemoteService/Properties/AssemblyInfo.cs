@@ -31,5 +31,8 @@ using System.Runtime.InteropServices;
 // Vous pouvez spécifier toutes les valeurs ou indiquer les numéros de build et de révision par défaut
 // en utilisant '*', comme indiqué ci-dessous :
 // [assembly: AssemblyVersion("1.0.*")]
-[assembly: AssemblyVersion("1.2.5.5")]
-[assembly: AssemblyFileVersion("1.2.5.5")]
+// Public release version x.y.z, tagged vx.y.z; the fourth number stays 0. Releases must change x.y.z (the TV app only
+// receives x.y.z, see Service.AppVersion). CI replaces the informational version with a development label on untagged builds.
+[assembly: AssemblyVersion("1.5.0.0")]
+[assembly: AssemblyFileVersion("1.5.0.0")]
+[assembly: AssemblyInformationalVersion("1.5.0")]

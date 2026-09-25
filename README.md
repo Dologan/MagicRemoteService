@@ -70,3 +70,10 @@ After almost all MagicRemoteService updates, for changes to take effect and to p
 Be careful while updating MagicRemoteService on the PC if you have "Automatically launch at startup" option checked or older executable file version running. You need to stop MagicRemoteService in your Windows service list or any running instance and replace the executable file. Otherwise there is a chance, due to the unique allowed running instance and even if you launch a new version, to keep an older version running.
 
 If you want to change the location of the executable file and if you have "Automatically launch at startup" option checked, you need to stop MagicRemoteService in your Windows service list and any running instance. Once you have done it, you will be able to move the executable. Finally, you will need to resave the PC tab to reconfigure the Windows service with the new path.
+
+## Building and releasing
+Every push to `master` and every pull request is built by GitHub Actions; the build of a `master` push can be downloaded from the run's artifacts and shows a development version such as `1.5.0-dev.12+abc1234`.
+
+The version comes from `AssemblyVersion` in `MagicRemoteService/Properties/AssemblyInfo.cs` (`1.5.0.0` for version 1.5.0). To release:
+1. Set `AssemblyVersion`, `AssemblyFileVersion` and `AssemblyInformationalVersion` to the new version, keeping the fourth number at 0, and merge it to `master`. Each release must change one of the first three numbers, as the TV app only receives those.
+2. Tag the commit `v1.5.0` and push the tag, or create a GitHub release with a new `v1.5.0` tag. The build attaches `MagicRemoteService-1.5.0.zip` and its SHA-256 checksum to the release. A tag that does not match `AssemblyVersion` fails the build.

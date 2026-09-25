@@ -72,6 +72,13 @@ namespace MagicRemoteService {
 				return vAssembly.Major + "." + vAssembly.Minor + "." + vAssembly.Build;
 			}
 		}
+		// Version shown to the user: "1.5.0" for a release, with a development label for other CI builds
+		public static string DisplayVersion {
+			get {
+				object[] arrAttribute = System.Reflection.Assembly.GetExecutingAssembly().GetCustomAttributes(typeof(System.Reflection.AssemblyInformationalVersionAttribute), false);
+				return arrAttribute.Length > 0 ? ((System.Reflection.AssemblyInformationalVersionAttribute)arrAttribute[0]).InformationalVersion : System.Reflection.Assembly.GetExecutingAssembly().GetName().Version.ToString();
+			}
+		}
 		// TVs installed from the settings, by address, with the display they control. Addresses are recorded at install time and
 		// whenever the settings window lists the TVs.
 		public static System.Collections.Generic.Dictionary<System.Net.IPAddress, uint> GetKnownTvs() {
@@ -265,6 +272,7 @@ namespace MagicRemoteService {
 			}
 
 			WinApi.ServiceStatus ssServiceStatus = new WinApi.ServiceStatus();
+			Service.Log("MagicRemoteService " + Service.DisplayVersion + " (" + System.Reflection.Assembly.GetExecutingAssembly().GetName().Version + ")");
 			switch(this.stType) {
 				case ServiceType.Server:
 					Service.Log("Service server start");
