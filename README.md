@@ -52,9 +52,28 @@ Some debugs logs notifications can appear at the bottom of the screen. Short cli
 
 I strongly recommend adding a Windows automatic screen shutdown to prevent pixel remaining with OLED TV.
 
+## Troubleshooting
+The Diagnostics tab of the settings window shows whether the PC is listening for the TV, whether the Windows Firewall rule exists and allows the current program, the PC addresses to use on the TV, the connected TVs, the recent connections with the reason each one ended, and the latest log lines. "Copy report" copies all of it to the clipboard.
+
+Logs are written to `%ProgramData%\MagicRemoteService\Logs` (or `%LocalAppData%\MagicRemoteService\Logs` when not running as administrator): `MagicRemoteService-service.log` for the Windows service and `MagicRemoteService-app.log` for the application that handles the TV connections. Warnings and errors also go to the Windows Event Viewer (Application log, source MagicRemoteService). Set the log level to Debug in the Diagnostics tab to log every key press and message; the change applies within a few seconds without restarting.
+
+Once the TV app has been reinstalled from this version, it forwards its own notifications and errors to the PC log (lines starting with `TV`), including the ones that happened while it was disconnected.
+
+When the TV app and the PC versions differ, the TV shows a notification and the PC logs a warning: reinstall the TV app from the settings.
+
+## Restricting connections
+By default any device on the network can connect to MagicRemoteService and send keystrokes to the PC. In the Diagnostics tab, "Only accept connections from the TVs installed from this PC" limits connections to the addresses of the TVs installed from the TV tab. The addresses are recorded at installation and refreshed each time the settings window lists the TVs, so if a TV gets a new address, update it in the TV tab (or give the TV a fixed address in your router).
+
 ## Updating MagicRemoteService
 After almost all MagicRemoteService updates, for changes to take effect and to prevent compatibility bugs, you need to reinstall the TV app.
 
 Be careful while updating MagicRemoteService on the PC if you have "Automatically launch at startup" option checked or older executable file version running. You need to stop MagicRemoteService in your Windows service list or any running instance and replace the executable file. Otherwise there is a chance, due to the unique allowed running instance and even if you launch a new version, to keep an older version running.
 
 If you want to change the location of the executable file and if you have "Automatically launch at startup" option checked, you need to stop MagicRemoteService in your Windows service list and any running instance. Once you have done it, you will be able to move the executable. Finally, you will need to resave the PC tab to reconfigure the Windows service with the new path.
+
+## Building and releasing
+Every push to `master` and every pull request is built by GitHub Actions; the build of a `master` push can be downloaded from the run's artifacts and shows a development version such as `1.5.0-dev.12+abc1234`.
+
+The version comes from `AssemblyVersion` in `MagicRemoteService/Properties/AssemblyInfo.cs` (`1.5.0.0` for version 1.5.0). To release:
+1. Set `AssemblyVersion`, `AssemblyFileVersion` and `AssemblyInformationalVersion` to the new version, keeping the fourth number at 0, and merge it to `master`. Each release must change one of the first three numbers, as the TV app only receives those.
+2. Tag the commit `v1.5.0` and push the tag, or create a GitHub release with a new `v1.5.0` tag. The build attaches `MagicRemoteService-1.5.0.zip` and its SHA-256 checksum to the release. A tag that does not match `AssemblyVersion` fails the build.

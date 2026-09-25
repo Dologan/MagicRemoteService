@@ -146,49 +146,85 @@ namespace MagicRemoteService {
 		}
 	}
 	internal static class WebOSCLI {
-		private static string ExecWebOSCLICommand(string strCommand, string strArgument, System.Collections.Generic.Dictionary<ushort, string> dInput = null, string strWorkingDirectory = null) {
-			System.Diagnostics.Process pProcess = new System.Diagnostics.Process();
-			pProcess.StartInfo.FileName = "cmd";
-			if(!string.IsNullOrEmpty(strWorkingDirectory)) {
-				pProcess.StartInfo.WorkingDirectory = strWorkingDirectory;
-			}
-			pProcess.StartInfo.Arguments = "/c " + strCommand + " " + strArgument;
-			pProcess.StartInfo.UseShellExecute = false;
-			pProcess.StartInfo.CreateNoWindow = true;
-			pProcess.StartInfo.RedirectStandardInput = true;
-			pProcess.StartInfo.RedirectStandardError = true;
-			pProcess.StartInfo.RedirectStandardOutput = true;
-			pProcess.Start();
-			string strErr = "";
-			string strOutput = "";
-			ushort usOutputLine = 0;
-			pProcess.ErrorDataReceived += delegate (object sender, System.Diagnostics.DataReceivedEventArgs e) {
-				if(e.Data != null) {
-					strErr += e.Data;
+		private const int iDefaultTimeout = 120000;
+		private static string ExecWebOSCLICommand(string strCommand, string strArgument, System.Collections.Generic.Dictionary<ushort, string> dInput = null, string strWorkingDirectory = null, int iTimeout = MagicRemoteService.WebOSCLI.iDefaultTimeout) {
+			using(System.Diagnostics.Process pProcess = new System.Diagnostics.Process()) {
+				pProcess.StartInfo.FileName = "cmd";
+				if(!string.IsNullOrEmpty(strWorkingDirectory)) {
+					pProcess.StartInfo.WorkingDirectory = strWorkingDirectory;
 				}
-			};
-			pProcess.OutputDataReceived += delegate (object sender, System.Diagnostics.DataReceivedEventArgs e) {
-				if(e.Data != null) {
-#if DEBUG
-					System.Console.WriteLine(e.Data);
-#endif
-					strOutput += e.Data + System.Environment.NewLine;
-					usOutputLine++;
-					if(dInput != null && dInput.ContainsKey(usOutputLine)) {
-						System.Threading.Tasks.Task.Run(async delegate () {
-							await System.Threading.Tasks.Task.Delay(10);
-							await pProcess.StandardInput.WriteLineAsync(dInput[usOutputLine]);
-						});
+				pProcess.StartInfo.Arguments = "/c " + strCommand + " " + strArgument;
+				pProcess.StartInfo.UseShellExecute = false;
+				pProcess.StartInfo.CreateNoWindow = true;
+				pProcess.StartInfo.RedirectStandardInput = true;
+				pProcess.StartInfo.RedirectStandardError = true;
+				pProcess.StartInfo.RedirectStandardOutput = true;
+				System.Text.StringBuilder sbErr = new System.Text.StringBuilder();
+				System.Text.StringBuilder sbOutput = new System.Text.StringBuilder();
+				ushort usOutputLine = 0;
+				pProcess.ErrorDataReceived += delegate (object sender, System.Diagnostics.DataReceivedEventArgs e) {
+					if(e.Data != null) {
+						lock(sbErr) {
+							sbErr.AppendLine(e.Data);
+						}
 					}
+				};
+				pProcess.OutputDataReceived += delegate (object sender, System.Diagnostics.DataReceivedEventArgs e) {
+					if(e.Data != null) {
+#if DEBUG
+						System.Console.WriteLine(e.Data);
+#endif
+						ushort usLine;
+						lock(sbOutput) {
+							sbOutput.AppendLine(e.Data);
+							usLine = ++usOutputLine;
+						}
+						if(dInput != null && dInput.TryGetValue(usLine, out string strInput)) {
+							System.Threading.Tasks.Task.Run(async delegate () {
+								await System.Threading.Tasks.Task.Delay(10);
+								await pProcess.StandardInput.WriteLineAsync(strInput);
+							});
+						}
+					}
+				};
+				MagicRemoteService.Service.LogIfDebug("webOS CLI: " + strCommand + " " + (strCommand == "ares-setup-device" && strArgument.Contains("password") ? "(arguments hidden)" : strArgument));
+				pProcess.Start();
+				pProcess.BeginErrorReadLine();
+				pProcess.BeginOutputReadLine();
+				if(!pProcess.WaitForExit(iTimeout)) {
+					// Killing cmd alone would leave node running, taskkill /T ends the whole tree
+					try {
+						using(System.Diagnostics.Process pKill = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("taskkill", "/T /F /PID " + pProcess.Id) {
+							UseShellExecute = false,
+							CreateNoWindow = true
+						})) {
+							pKill.WaitForExit(10000);
+						}
+					} catch(System.Exception) {
+					}
+					string strPartial;
+					lock(sbOutput) {
+						strPartial = sbOutput.ToString().Trim();
+					}
+					throw new MagicRemoteService.WebOSCLIException(strCommand + " did not finish within " + (iTimeout / 1000) + "s (TV unreachable, or waiting for input?)" + (strPartial.Length == 0 ? "" : System.Environment.NewLine + strPartial));
 				}
-			};
-			pProcess.BeginErrorReadLine();
-			pProcess.BeginOutputReadLine();
-			pProcess.WaitForExit();
-			if(pProcess.ExitCode != 0) {
-				throw new MagicRemoteService.WebOSCLIException(strErr);
+				// Waits for the redirected output to be fully read
+				pProcess.WaitForExit();
+				string strErr;
+				string strOutput;
+				lock(sbErr) {
+					strErr = sbErr.ToString().Trim();
+				}
+				lock(sbOutput) {
+					strOutput = sbOutput.ToString();
+				}
+				if(pProcess.ExitCode != 0) {
+					MagicRemoteService.Service.Warn("webOS CLI " + strCommand + " failed with exit code " + pProcess.ExitCode + ": " + strErr + " " + strOutput.Trim());
+					// Some ares commands report errors on the standard output, never show an empty message
+					throw new MagicRemoteService.WebOSCLIException(strErr.Length != 0 ? strErr : strOutput.Trim().Length != 0 ? strOutput.Trim() : strCommand + " failed with exit code " + pProcess.ExitCode + ", is the webOS CLI installed and on the PATH?");
+				}
+				return strOutput;
 			}
-			return strOutput;
 		}
 		public static MagicRemoteService.WebOSCLIDeviceInput[] InputList() {
 			return new MagicRemoteService.WebOSCLIDeviceInput[] {
@@ -270,14 +306,14 @@ namespace MagicRemoteService {
 			if(!string.IsNullOrEmpty(strPackage)) {
 				tabArgument.Add("\"" + strPackage + "\"");
 			}
-			MagicRemoteService.WebOSCLI.ExecWebOSCLICommand("ares-package", string.Join(" ", tabArgument));
+			MagicRemoteService.WebOSCLI.ExecWebOSCLICommand("ares-package", string.Join(" ", tabArgument), iTimeout: 300000);
 		}
 		public static void Install(string strDevice, string strPackageFile) {
 			System.Collections.Generic.List<string> tabArgument = new System.Collections.Generic.List<string> {
 				"-d \"" + strDevice + "\"",
 				"\"" + strPackageFile + "\""
 			};
-			MagicRemoteService.WebOSCLI.ExecWebOSCLICommand("ares-install", string.Join(" ", tabArgument));
+			MagicRemoteService.WebOSCLI.ExecWebOSCLICommand("ares-install", string.Join(" ", tabArgument), iTimeout: 300000);
 		}
 		public static void InstallRemove(string strDevice, string strPackageFile) {
 			System.Collections.Generic.List<string> tabArgument = new System.Collections.Generic.List<string> {

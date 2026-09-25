@@ -52,6 +52,7 @@ namespace MagicRemoteService {
 		}
 		public Application() {
 			MagicRemoteService.Application.wExplorer.EventArrived += this.OnExplorerStart;
+			bool bFirstRun = (MagicRemoteService.Program.bElevated ? Microsoft.Win32.Registry.LocalMachine : Microsoft.Win32.Registry.CurrentUser).OpenSubKey(@"Software\MagicRemoteService") == null;
 			this.VersionScript();
 
 			this.mrsService.ServiceStart();
@@ -66,7 +67,7 @@ namespace MagicRemoteService {
 			this.niIcon.DoubleClick += this.Setting;
 			this.niIcon.Visible = true;
 
-			if((MagicRemoteService.Program.bElevated ? Microsoft.Win32.Registry.LocalMachine : Microsoft.Win32.Registry.CurrentUser).OpenSubKey(@"Software\MagicRemoteService") == null) {
+			if(bFirstRun) {
 				this.Setting(this, System.EventArgs.Empty);
 			}
 		}
@@ -74,8 +75,11 @@ namespace MagicRemoteService {
 		private void VersionScript() {
 			System.Version vCurrent = System.Reflection.Assembly.GetExecutingAssembly().GetName().Version;
 			Microsoft.Win32.RegistryKey rkMagicRemoteService = (MagicRemoteService.Program.bElevated ? Microsoft.Win32.Registry.LocalMachine : Microsoft.Win32.Registry.CurrentUser).CreateSubKey(@"Software\MagicRemoteService");
-			System.Version vRegistry = new System.Version((string)rkMagicRemoteService.GetValue("Version"));
-			if(vRegistry != null && vRegistry != vCurrent) {
+			string strRegistryVersion = rkMagicRemoteService.GetValue("Version") as string;
+			if(!System.Version.TryParse(strRegistryVersion, out System.Version vRegistry)) {
+				// First run (or unreadable value): nothing to migrate, just record the current version
+				rkMagicRemoteService.SetValue("Version", vCurrent.ToString(), Microsoft.Win32.RegistryValueKind.String);
+			} else if(vRegistry != vCurrent) {
 				if(vRegistry < new System.Version("1.2.3.0")) {
 					rkMagicRemoteService.DeleteSubKey("KeyBindMouse", false);
 					rkMagicRemoteService.DeleteSubKey("KeyBindKeyboard", false);

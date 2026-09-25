@@ -152,6 +152,10 @@
       <DesignTime>True</DesignTime>
       <DependentUpon>Resources.fr.resx</DependentUpon>
     </Compile>
+    <Compile Include="DiagnosticsPage.cs">
+      <SubType>Component</SubType>
+    </Compile>
+    <Compile Include="Logger.cs" />
     <Compile Include="WebOSCLI.cs" />
     <Compile Include="Setting.cs">
       <SubType>Form</SubType>
