@@ -34,9 +34,6 @@ jobs:
       - name: Set up MSBuild
         uses: microsoft/setup-msbuild@v2
 
-      - name: Set up NuGet
-        uses: NuGet/setup-nuget@v2
-
       - name: Determine version
         id: version
         shell: pwsh
@@ -69,9 +66,6 @@ jobs:
           "label=$strLabel" >> $env:GITHUB_OUTPUT
           Write-Host "Building MagicRemoteService $strLabel"
 
-      - name: Restore NuGet packages
-        run: nuget restore MagicRemoteService.sln -NonInteractive
-
       - name: Build
         run: msbuild MagicRemoteService.sln /p:Configuration=Release "/p:Platform=Any CPU" /m /nologo /clp:Summary
 
@@ -80,24 +74,19 @@ jobs:
         env:
           LABEL: ${{ steps.version.outputs.label }}
         run: |
-          $strName = "MagicRemoteService-$env:LABEL"
-          $strStaging = "dist/$strName"
+          $strStaging = "dist/MagicRemoteService-$env:LABEL"
           New-Item -ItemType Directory -Force -Path $strStaging | Out-Null
           Copy-Item "MagicRemoteService/bin/Release/*" $strStaging -Recurse
           Get-ChildItem $strStaging -Recurse -Include *.pdb | Remove-Item
           Copy-Item README.md, LICENSE $strStaging
-          Compress-Archive -Path "$strStaging/*" -DestinationPath "dist/$strName.zip"
-          $strHash = (Get-FileHash "dist/$strName.zip" -Algorithm SHA256).Hash.ToLower()
-          "$strHash  $strName.zip" | Set-Content "dist/$strName.zip.sha256" -Encoding ascii
-          Get-ChildItem dist -File | Format-Table Name, Length
+          Get-ChildItem $strStaging -Recurse -File | Format-Table FullName, Length
 
+      # The artifact is the folder itself, GitHub zips it once for download
       - name: Upload build
         uses: actions/upload-artifact@v4
         with:
           name: MagicRemoteService-${{ steps.version.outputs.label }}
-          path: |
-            dist/*.zip
-            dist/*.sha256
+          path: dist/MagicRemoteService-${{ steps.version.outputs.label }}/
           if-no-files-found: error
 
   release:
@@ -111,7 +100,16 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: MagicRemoteService-${{ needs.build.outputs.label }}
-          path: dist
+          path: build
+
+      - name: Zip
+        env:
+          LABEL: ${{ needs.build.outputs.label }}
+        run: |
+          mkdir dist
+          (cd build && zip -r -X "../dist/MagicRemoteService-$LABEL.zip" .)
+          (cd dist && sha256sum "MagicRemoteService-$LABEL.zip" > "MagicRemoteService-$LABEL.zip.sha256")
+          unzip -l "dist/MagicRemoteService-$LABEL.zip"
 
       - name: Publish release
         env:
