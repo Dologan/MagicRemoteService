@@ -671,7 +671,9 @@ namespace MagicRemoteService {
 						MagicRemoteService.Setting.AppExtract(strTVDir, strVersion, wocdiInput, ipaSendIP, dSendPort, ipMask, macPCMac, dLongClick, bInputDirect, bOverlay, bExtend);
 						MagicRemoteService.Service.Log("Installing TV app " + strVersion + " on " + wocdDevice.Name + " (" + wocdDevice.DeviceInfo.IP + "), input " + wocdiInput.Id + ", PC " + ipaSendIP + ":" + dSendPort);
 						MagicRemoteService.WebOSCLI.Package(strTVDir, MagicRemoteService.Application.CompleteDir(strTVDir) + "MagicRemoteService", MagicRemoteService.Application.CompleteDir(strTVDir) + "Service");
-						MagicRemoteService.WebOSCLI.Install(wocdDevice.Name, System.IO.Path.Combine(strTVDir, "com.cathwyler.magicremoteservice." + wocdiInput.AppIdShort + "_" + strVersion + "_all.ipk"));
+						string strPackageFile = System.IO.Path.Combine(strTVDir, "com.cathwyler.magicremoteservice." + wocdiInput.AppIdShort + "_" + strVersion + "_all.ipk");
+						MagicRemoteService.WebOSCLI.WaitForDeviceClock(wocdDevice.Name, strPackageFile);
+						MagicRemoteService.WebOSCLI.Install(wocdDevice.Name, strPackageFile);
 						MagicRemoteService.WebOSCLI.Launch(wocdDevice.Name, "com.cathwyler.magicremoteservice." + wocdiInput.AppIdShort);
 						if(bOverlay) {
 							MagicRemoteService.WebOSCLI.NovacomRun(wocdDevice.Name, @"luna-send-pub -n 1 'luna://com.webos.service.eim/deleteDevice' '{""appId"":""com.cathwyler.magicremoteservice." + wocdiInput.AppIdShort + @"""}'");

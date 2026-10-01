@@ -59,6 +59,8 @@ Logs are written to `%ProgramData%\MagicRemoteService\Logs` (or `%LocalAppData%\
 
 Once the TV app has been reinstalled from this version, it forwards its own notifications and errors to the PC log (lines starting with `TV`), including the ones that happened while it was disconnected.
 
+If installing the TV app fails with "ipk verified failed", check the TV clock: the TV rejects a package dated after its own time. MagicRemoteService waits up to two minutes for a TV clock that is behind the PC, and reports the difference when it is larger. Set the date and time automatically on the TV (Settings, General, Time & Date).
+
 When the TV app and the PC versions differ, the TV shows a notification and the PC logs a warning: reinstall the TV app from the settings.
 
 ## Restricting connections

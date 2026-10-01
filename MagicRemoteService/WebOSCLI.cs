@@ -317,6 +317,47 @@ namespace MagicRemoteService {
 			};
 			MagicRemoteService.WebOSCLI.ExecWebOSCLICommand("ares-novacom", string.Join(" ", tabArgument));
 		}
+		// TV clock in seconds since 1970 (UTC), or -1 when it cannot be read
+		public static long NovacomTime(string strDevice) {
+			System.Collections.Generic.List<string> tabArgument = new System.Collections.Generic.List<string> {
+				"-d \"" + strDevice + "\"",
+				"-r \"date +%s\""
+			};
+			foreach(string strLine in MagicRemoteService.WebOSCLI.ExecWebOSCLICommand("ares-novacom", string.Join(" ", tabArgument)).Split(new char[] { '\r', '\n' }, System.StringSplitOptions.RemoveEmptyEntries)) {
+				if(long.TryParse(strLine.Trim(), out long lTime)) {
+					return lTime;
+				}
+			}
+			return -1;
+		}
+		// The TV rejects a package dated after its own clock ("ipk verified failed"), and the package carries this PC's time. When the TV
+		// clock is behind, wait for it to pass the package date instead of failing until the next attempt happens to come late enough
+		public static void WaitForDeviceClock(string strDevice, string strPackageFile, int iMaxWait = 120000) {
+			long lRequired = (long)System.Math.Floor((System.IO.File.GetLastWriteTimeUtc(strPackageFile) - new System.DateTime(1970, 1, 1, 0, 0, 0, System.DateTimeKind.Utc)).TotalSeconds) + 1;
+			int iStart = System.Environment.TickCount;
+			while(true) {
+				long lDevice;
+				try {
+					lDevice = MagicRemoteService.WebOSCLI.NovacomTime(strDevice);
+				} catch(MagicRemoteService.WebOSCLIException eException) {
+					MagicRemoteService.Service.Warn("Could not read the TV clock, installing without checking it: " + eException.Message);
+					return;
+				}
+				if(lDevice < 0) {
+					MagicRemoteService.Service.Warn("Could not read the TV clock, installing without checking it");
+					return;
+				}
+				long lBehind = lRequired - lDevice;
+				if(lBehind <= 0) {
+					return;
+				}
+				if(lBehind * 1000 > iMaxWait - unchecked(System.Environment.TickCount - iStart)) {
+					throw new MagicRemoteService.WebOSCLIException("The TV clock is " + lBehind + " seconds behind this PC, so the TV would reject the package as dated in the future. Set the date and time automatically on the TV (Settings, General, Time & Date) and check this PC's clock.");
+				}
+				MagicRemoteService.Service.Log("TV clock is " + lBehind + "s behind this PC, waiting for it to pass the package date before installing");
+				System.Threading.Thread.Sleep((int)lBehind * 1000 + 500);
+			}
+		}
 		public static void Package(string strOutDirectory, string strApplication, string strService = null, string strPackage = null) {
 			System.Collections.Generic.List<string> tabArgument = new System.Collections.Generic.List<string> {
 				"\"" + strApplication + "\"",
