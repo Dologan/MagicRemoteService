@@ -17,13 +17,19 @@ Window.prototype.oneEventListener = function(strType, fListener) {
 Element.prototype.oneEventListener = Window.prototype.oneEventListener;
 Document.prototype.oneEventListener = Window.prototype.oneEventListener;
 
-Object.prototype.spread = function(o) {
-	for(var strProperty in this) {
-		if(strProperty in o) {
-			this[strProperty] = o[strProperty];
+// Non-enumerable, otherwise "spread" would show up in every for...in loop over any object
+Object.defineProperty(Object.prototype, "spread", {
+	value: function(o) {
+		for(var strProperty in this) {
+			if(strProperty in o) {
+				this[strProperty] = o[strProperty];
+			}
 		}
-	}
-};
+	},
+	enumerable: false,
+	writable: true,
+	configurable: true
+});
 
 Object.prototype.toString = function() {
 	const arrAncestor = [];
@@ -60,7 +66,13 @@ function readJson(fCallback, strPath) {
 	xhr.send(null);
 }
 
-const bDebug = false;
+// Settings written by the PC when installing the app (config.js, loaded before this file); the defaults only apply if it is missing
+var oConfig = (typeof oMagicRemoteServiceConfig === "object" && oMagicRemoteServiceConfig !== null) ? oMagicRemoteServiceConfig : {};
+function ConfigValue(strKey, oDefault) {
+	return (Object.prototype.hasOwnProperty.call(oConfig, strKey) && typeof oConfig[strKey] === typeof oDefault) ? oConfig[strKey] : oDefault;
+}
+
+const bDebug = ConfigValue("debug", false);
 
 const MessageType = {
 	PositionRelative: 0x00,
@@ -72,18 +84,19 @@ const MessageType = {
 	Shutdown: 0x06
 }
 
-const bInputDirect = true;
-const bOverlay = true;
+const bInputDirect = ConfigValue("inputDirect", true);
+const bOverlay = ConfigValue("overlay", true);
 const uiRemoteEvent = 200;
-const uiLongClick = 1500;
-const strInputId = "HDMI";
-const strInputAppId = "com.webos.app.hdmi";
-const strInputName = "HDMI";
-const strInputSource = "ext://hdmi";
-const strIP = "127.0.0.1";
-const uiPort = 41230;
-const strMask = "255.255.255.0";
-const strMac = "AA:AA:AA:AA:AA:AA";
+const uiLongClick = ConfigValue("longClick", 1500);
+const strInputId = ConfigValue("inputId", "HDMI");
+const strInputAppId = ConfigValue("inputAppId", "com.webos.app.hdmi");
+const strInputName = ConfigValue("inputName", "HDMI");
+const strInputSource = ConfigValue("inputSource", "ext://hdmi");
+const strIP = ConfigValue("ip", "127.0.0.1");
+const uiPort = ConfigValue("port", 41230);
+const strMask = ConfigValue("mask", "255.255.255.0");
+const strMac = ConfigValue("mac", "AA:AA:AA:AA:AA:AA");
+const strAppVersion = ConfigValue("version", "");
 const strBroadcast = strIP.split(".").map(function(x, i) {
 	return(x | (parseInt(strMask.split(".")[i], 10) ^ 0xFF)).toString(10);
 }).join(".");
@@ -94,7 +107,7 @@ const aSensor = {
 	dFactor: 50,
 	dSpeed: 9,
 }
-const strAppId = "com.cathwyler.magicremoteservice";
+const strAppId = ConfigValue("appId", "com.cathwyler.magicremoteservice");
 
 const strPath = webOS.fetchAppRootPath();
 var arrVersion = null;
@@ -179,18 +192,84 @@ function ScreenCancel(deScreen, bCursor) {
 	}
 }
 
-function Log() {
-	console.log.apply(console, arguments);
-	Toast(oString.strLogTitle, Array.prototype.slice.call(arguments).map(function(o) {
+function FormatLog(arrArgument) {
+	return Array.prototype.slice.call(arrArgument).map(function(o) {
 		if(typeof o !== "object" || o === null) {
 			return o;
 		} else {
 			return o.toString();
 		}
-	}).join(""));
+	}).join("");
 }
 
-function LogIfDebug() {};
+function LogTitle(strKey, strDefault) {
+	return (oString !== null && oString[strKey]) ? oString[strKey] : strDefault;
+}
+
+// Log messages are also forwarded to the PC as WebSocket text frames so they end up in the PC log file.
+// The PC tells the app which levels it wants (0 error, 1 warning, 2 information, 3 debug); messages logged
+// while disconnected are queued and sent once the connection is open.
+var uiRemoteLogLevel = 2;
+var arrRemoteLog = [];
+var uiFailedOpen = 0;
+function TimeString() {
+	var dNow = new Date();
+	return ("0" + dNow.getHours()).slice(-2) + ":" + ("0" + dNow.getMinutes()).slice(-2) + ":" + ("0" + dNow.getSeconds()).slice(-2);
+}
+function RemoteLog(uiLevel, strMessage) {
+	if(uiLevel > uiRemoteLogLevel) {
+		return;
+	}
+	try {
+		var strText = String(strMessage);
+		if(strText.length > 2000) {
+			strText = strText.slice(0, 2000) + "...";
+		}
+		if(socClient && socClient.readyState === WebSocket.OPEN) {
+			socClient.send(JSON.stringify({
+				t: "log",
+				l: uiLevel,
+				m: strText
+			}));
+		} else {
+			arrRemoteLog.push({
+				t: "log",
+				l: uiLevel,
+				m: "(logged at " + TimeString() + " while disconnected) " + strText
+			});
+			if(arrRemoteLog.length > 100) {
+				arrRemoteLog.shift();
+			}
+		}
+	} catch(eError) {
+		console.error("RemoteLog failure", eError);
+	}
+}
+function RemoteLogFlush() {
+	try {
+		while(arrRemoteLog.length > 0 && socClient && socClient.readyState === WebSocket.OPEN) {
+			var oLog = arrRemoteLog.shift();
+			if(oLog.l <= uiRemoteLogLevel) {
+				socClient.send(JSON.stringify(oLog));
+			}
+		}
+	} catch(eError) {
+		console.error("RemoteLogFlush failure", eError);
+	}
+}
+
+function Log() {
+	console.log.apply(console, arguments);
+	var strMessage = FormatLog(arguments);
+	Toast(LogTitle("strLogTitle", "Log"), strMessage);
+	RemoteLog(2, strMessage);
+}
+
+function LogIfDebug() {
+	if(uiRemoteLogLevel >= 3) {
+		RemoteLog(3, FormatLog(arguments));
+	}
+};
 if(bDebug) {
 	LogIfDebug = function() {
 		Log.apply(this, arguments);
@@ -199,24 +278,16 @@ if(bDebug) {
 
 function Warn() {
 	console.warn.apply(console, arguments);
-	Toast(oString.strWarnTitle, Array.prototype.slice.call(arguments).map(function(o) {
-		if(typeof o !== "object" || o === null) {
-			return o;
-		} else {
-			return o.toString();
-		}
-	}).join(""));
+	var strMessage = FormatLog(arguments);
+	Toast(LogTitle("strWarnTitle", "Warning"), strMessage);
+	RemoteLog(1, strMessage);
 }
 
-function Error() {
+function LogError() {
 	console.error.apply(console, arguments);
-	Toast(oString.strErrorTitle, Array.prototype.slice.call(arguments).map(function(o) {
-		if(typeof o !== "object" || o === null) {
-			return o;
-		} else {
-			return o.toString();
-		}
-	}).join(""));
+	var strMessage = FormatLog(arguments);
+	Toast(LogTitle("strErrorTitle", "Error"), strMessage);
+	RemoteLog(0, strMessage);
 }
 
 function AppVisible() {};
@@ -335,12 +406,12 @@ function SubscriptionInputStatus() {
 					}
 					break;
 				default:
-					Error(oString.strGetAllInputStatusFailure);
+					LogError(oString.strGetAllInputStatusFailure);
 					break;
 				}
 		},
 		onFailure: function(inError) {
-			Error(oString.strGetAllInputStatusFailure + " [", "(" + typeof inError.errorCode + ")", inError.errorCode, ", ", inError.errorText, "]");
+			LogError(oString.strGetAllInputStatusFailure + " [", "(" + typeof inError.errorCode + ")", inError.errorCode, ", ", inError.errorText, "]");
 			Open();
 		}
 	});
@@ -373,7 +444,7 @@ function SubscriptionScreenSaverRequest() {
 										console.error(oString.strResponseScreenSaverRequestFailure + " [", "(" + typeof inError.errorCode + ")", inError.errorCode, ", ", inError.errorText, "]");
 										break;
 									default:
-										Error(oString.strResponseScreenSaverRequestFailure + " [", "(" + typeof inError.errorCode + ")", inError.errorCode, ", ", inError.errorText, "]");
+										LogError(oString.strResponseScreenSaverRequestFailure + " [", "(" + typeof inError.errorCode + ")", inError.errorCode, ", ", inError.errorText, "]");
 										break;
 								}
 							} 
@@ -384,7 +455,7 @@ function SubscriptionScreenSaverRequest() {
 					LogIfDebug(oString.strRegisterScreenSaverRequestSubscribe);
 					break;
 				default:
-					Error(oString.strRegisterScreenSaverRequestFailure);
+					LogError(oString.strRegisterScreenSaverRequestFailure);
 					break;
 			}
 		}, 
@@ -395,7 +466,7 @@ function SubscriptionScreenSaverRequest() {
 					console.error(oString.strRegisterScreenSaverRequestFailure + " [", "(" + typeof inError.errorCode + ")", inError.errorCode, ", ", inError.errorText, "]");
 					break;
 				default:
-					Error(oString.strRegisterScreenSaverRequestFailure + " [", "(" + typeof inError.errorCode + ")", inError.errorCode, ", ", inError.errorText, "]");
+					LogError(oString.strRegisterScreenSaverRequestFailure + " [", "(" + typeof inError.errorCode + ")", inError.errorCode, ", ", inError.errorText, "]");
 					break;
 			}
 		} 
@@ -421,7 +492,7 @@ function ResetQuaternion() {
 			LogIfDebug(oString.strResetQuaternionSuccess);
 		},
 		onFailure: function (inError) {
-			Error(oString.strResetQuaternionFailure + " [", "(" + typeof inError.errorCode + ")", inError.errorCode, ", ", inError.errorText, "]");
+			LogError(oString.strResetQuaternionFailure + " [", "(" + typeof inError.errorCode + ")", inError.errorCode, ", ", inError.errorText, "]");
 		},
 	});
 }
@@ -543,7 +614,7 @@ function SubscriptionGetSensorData() {
 					LogIfDebug(oString.strGetSensorDataSubscribe);
 					break;
 				default:
-					Error(oString.strGetSensorDataFailure);
+					LogError(oString.strGetSensorDataFailure);
 					break;
 				}
 		},
@@ -573,7 +644,7 @@ function SubscriptionGetSensorData() {
 					}
 					break;
 				default:
-					Error(oString.strGetSensorDataFailure + " [", "(" + typeof inError.errorCode + ")", inError.errorCode, ", ", inError.errorText, "]");
+					LogError(oString.strGetSensorDataFailure + " [", "(" + typeof inError.errorCode + ")", inError.errorCode, ", ", inError.errorText, "]");
 					break;
 			}
 		}
@@ -590,7 +661,7 @@ function LaunchInput() {
 			LogIfDebug(oString.strLaunchSuccess);
 		},
 		onFailure: function(inError) {
-			Error(oString.strLaunchFailure + " [", "(" + typeof inError.errorCode + ")", inError.errorCode, ", ", inError.errorText, "]");
+			LogError(oString.strLaunchFailure + " [", "(" + typeof inError.errorCode + ")", inError.errorCode, ", ", inError.errorText, "]");
 		},
 	});
 }
@@ -610,12 +681,12 @@ function SubscriptionClose() {
 					LogIfDebug(oString.strCloseSubscribe);
 					break;
 				default:
-					Error(oString.strCloseFailure);
+					LogError(oString.strCloseFailure);
 					break;
 			}
 		},
 		onFailure: function(inError) {
-			Error(oString.strCloseFailure + " [", "(" + typeof inError.errorCode + ")", inError.errorCode, ", ", inError.errorText, "]");
+			LogError(oString.strCloseFailure + " [", "(" + typeof inError.errorCode + ")", inError.errorCode, ", ", inError.errorText, "]");
 		},
 	});
 }
@@ -633,22 +704,25 @@ function SubscriptionLog() {
 						case 0:
 							if(inResponse.log.bConsole){
 								console.log(inResponse.log.strMessage);
+								RemoteLog(2, "[TV service] " + inResponse.log.strMessage);
 							} else{
-								Log(inResponse.log.strMessage);
+								Log("[TV service] " + inResponse.log.strMessage);
 							}
 							break;
 						case 1:
 							if(inResponse.log.bConsole){
 								console.warn(inResponse.log.strMessage);
+								RemoteLog(1, "[TV service] " + inResponse.log.strMessage);
 							} else{
-								Warn(inResponse.log.strMessage);
+								Warn("[TV service] " + inResponse.log.strMessage);
 							}
 							break;
 						case 2:
 							if(inResponse.log.bConsole){
 								console.error(inResponse.log.strMessage);
+								RemoteLog(0, "[TV service] " + inResponse.log.strMessage);
 							} else{
-								Error(inResponse.log.strMessage);
+								LogError("[TV service] " + inResponse.log.strMessage);
 							}
 							break;
 					}
@@ -657,12 +731,12 @@ function SubscriptionLog() {
 					LogIfDebug(oString.strLogSubscribe);
 					break;
 				default:
-					Error(oString.strLogFailure);
+					LogError(oString.strLogFailure);
 					break;
 			}
 		},
 		onFailure: function(inError) {
-			Error(oString.strLogFailure + " [", "(" + typeof inError.errorCode + ")", inError.errorCode, ", ", inError.errorText, "]");
+			LogError(oString.strLogFailure + " [", "(" + typeof inError.errorCode + ")", inError.errorCode, ", ", inError.errorText, "]");
 		},
 	});
 }
@@ -931,6 +1005,20 @@ function SocketOpen() {
 	socClient.binaryType = "arraybuffer";
 	socClient.onopen = function(e) {
 		LogIfDebug(oString.strSocketOpened);
+		e.target.bOpened = true;
+		try {
+			// Announces that this app understands text frames, the PC then sends the log level it wants
+			e.target.send(JSON.stringify({
+				t: "hello",
+				v: strAppVersion,
+				sdk: arrVersion === null ? "" : arrVersion.join(".")
+			}));
+		} catch(eError) {
+			console.error("Hello failure", eError);
+		}
+		RemoteLog(2, "TV app connected to " + strIP + ":" + uiPort + " after " + uiFailedOpen + " failed attempt(s) (webOS SDK " + (arrVersion === null ? "?" : arrVersion.join(".")) + ", input " + strInputId + ", overlay " + bOverlay + ", input direct " + bInputDirect + ")");
+		uiFailedOpen = 0;
+		RemoteLogFlush();
 		SocketOpened();
 		clearInterval(iIntervalRetryOpen);
 		iIntervalRetryOpen = 0;
@@ -946,6 +1034,11 @@ function SocketOpen() {
 	};
 	socClient.onclose = function(e) {
 		LogIfDebug(oString.strSocketClosed);
+		if(e.target.bOpened !== true) {
+			uiFailedOpen++;
+		} else if(e.target === socClient) {
+			RemoteLog(2, "Connection to " + strIP + ":" + uiPort + " closed (code " + e.code + (e.reason ? ", reason " + e.reason : "") + (e.wasClean ? "" : ", not clean") + ")");
+		}
 		if(socClient !== null && !iIntervalRetryOpen) {
 			CursorShowCountIf0();
 			SocketClosed();
@@ -987,10 +1080,21 @@ function SocketOpen() {
 					}
 					break;
 				default:
-					Error(oString.strActionUnprocessed);
+					LogError(oString.strActionUnprocessed);
 			}
 		} else {
-			Log(e.data);
+			var oMessage = null;
+			try {
+				oMessage = JSON.parse(e.data);
+			} catch(eError) {
+			}
+			if(oMessage !== null && typeof oMessage === "object" && oMessage.t === "loglevel" && typeof oMessage.l === "number") {
+				uiRemoteLogLevel = oMessage.l;
+			} else if(oMessage !== null && typeof oMessage === "object" && oMessage.t === "notice" && typeof oMessage.m === "string") {
+				Warn(oMessage.m);
+			} else {
+				Log(e.data);
+			}
 		}
 	}
 }
@@ -1001,7 +1105,7 @@ function SocketClose() {
 }
 function Open() {
 	if(socClient !== null) {
-		Error(oString.strSocketErrorOpen);
+		LogError(oString.strSocketErrorOpen);
 	} else {
 		SocketClosed();
 		iIntervalRetryOpen = setInterval(function() {
@@ -1015,7 +1119,7 @@ function Open() {
 }
 function Close() {
 	if(socClient === null) {
-		Error(oString.strSocketErrorClose);
+		LogError(oString.strSocketErrorClose);
 	} else {
 		SocketOpened();
 		if(iIntervalRetryOpen) {
@@ -1048,7 +1152,7 @@ function SendWol(mMac, strBroadcast) {
 			LogIfDebug(oString.strSendWolSuccess + " [0x" + inResponse.strBuffer + "]@" + strBroadcast + ":9 ", mMac);
 		},
 		onFailure: function(inError) {
-			Error(oString.strSendWolFailure + " [", "(" + typeof inError.errorCode + ")", inError.errorCode, ", ", inError.errorText, "]@" + strBroadcast + ":9 ", mMac);
+			LogError(oString.strSendWolFailure + " [", "(" + typeof inError.errorCode + ")", inError.errorCode, ", ", inError.errorText, "]@" + strBroadcast + ":9 ", mMac);
 		}
 	});
 }
@@ -1064,7 +1168,7 @@ function SendPositionRelative(pPositionRelative) {
 			socClient.send(bufPositionRelative);
 			//LogIfDebug(oString.strSendPositionRelativeSuccess + " [0x" + bufPositionRelative.toString(16) + "]@" + strIP + ":" + uiPort + " ", pPositionRelative);
 		} catch(eError) {
-			Error(oString.strSendPositionRelativeFailure + " [", eError, "]@" + strIP + ":" + uiPort + " ", pPositionRelative);
+			LogError(oString.strSendPositionRelativeFailure + " [", eError, "]@" + strIP + ":" + uiPort + " ", pPositionRelative);
 		}
 	}
 }
@@ -1080,7 +1184,7 @@ function SendPositionAbsolute(pPositionAbsolute) {
 			socClient.send(bufPositionAbsolute);
 			//LogIfDebug(oString.strSendPositionAbsoluteSuccess + " [0x" + bufPositionAbsolute.toString(16) + "]@" + strIP + ":" + uiPort + " ", pPositionAbsolute);
 		} catch(eError) {
-			Error(oString.strSendPositionAbsoluteFailure + " [", eError, "]@" + strIP + ":" + uiPort + " ", pPositionAbsolute);
+			LogError(oString.strSendPositionAbsoluteFailure + " [", eError, "]@" + strIP + ":" + uiPort + " ", pPositionAbsolute);
 		}
 	}
 }
@@ -1095,7 +1199,7 @@ function SendWheel(wWheel) {
 			socClient.send(bufWheel);
 			LogIfDebug(oString.strSendWheelSuccess + " [0x" + bufWheel.toString(16) + "]@" + strIP + ":" + uiPort + " ", wWheel);
 		} catch(eError) {
-			Error(oString.strSendWheelFailure + " [", eError, "]@" + strIP + ":" + uiPort + " ", wWheel);
+			LogError(oString.strSendWheelFailure + " [", eError, "]@" + strIP + ":" + uiPort + " ", wWheel);
 		}
 	}
 }
@@ -1110,7 +1214,7 @@ function SendVisible(vVisible) {
 			socClient.send(bufVisible);
 			LogIfDebug(oString.strSendVisibleSuccess + " [0x" + bufVisible.toString(16) + "]@" + strIP + ":" + uiPort + " ", vVisible);
 		} catch(eError) {
-			Error(oString.strSendVisibleFailure + " [", eError, "]@" + strIP + ":" + uiPort + " ", vVisible);
+			LogError(oString.strSendVisibleFailure + " [", eError, "]@" + strIP + ":" + uiPort + " ", vVisible);
 		}
 	}
 }
@@ -1126,7 +1230,7 @@ function SendKey(kKey) {
 			socClient.send(bufKey);
 			LogIfDebug(oString.strSendKeySuccess + " [0x" + bufKey.toString(16) + "]@" + strIP + ":" + uiPort + " ", kKey);
 		} catch(eError) {
-			Error(oString.strSendKeyFailure + " [", eError, "]@" + strIP + ":" + uiPort + " ", kKey);
+			LogError(oString.strSendKeyFailure + " [", eError, "]@" + strIP + ":" + uiPort + " ", kKey);
 		}
 	}
 }
@@ -1141,7 +1245,7 @@ function SendUnicode(kUnicode) {
 			socClient.send(bufUnicode);
 			LogIfDebug(oString.strSendUnicodeSuccess + " [0x" + bufUnicode.toString(16) + "]@" + strIP + ":" + uiPort + " ", kUnicode);
 		} catch(eError) {
-			Error(oString.strSendUnicodeFailure + " [", eError, "]@" + strIP + ":" + uiPort + " ", kUnicode);
+			LogError(oString.strSendUnicodeFailure + " [", eError, "]@" + strIP + ":" + uiPort + " ", kUnicode);
 		}
 	}
 }
@@ -1155,7 +1259,7 @@ function SendShutdown() {
 			socClient.send(bufShutdown);
 			LogIfDebug(oString.strSendShutdownSuccess + " [0x" + bufShutdown.toString(16) + "]@" + strIP + ":" + uiPort);
 		} catch(eError) {
-			Error(oString.strSendShutdownFailure + " [", eError, "]@" + strIP + ":" + uiPort);
+			LogError(oString.strSendShutdownFailure + " [", eError, "]@" + strIP + ":" + uiPort);
 		}
 	}
 }
@@ -1172,7 +1276,7 @@ webOS.service.request("luna://com.webos.service.tv.systemproperty", {
 		Load();
 	},
 	onFailure: function(inError) {
-		throw new Error(inError.errorText);
+		LogError("getSystemInfo failure [", "(" + typeof inError.errorCode + ")", inError.errorCode, ", ", inError.errorText, "]");
 	}
 });
 
@@ -1201,7 +1305,7 @@ webOS.service.request("luna://com.webos.settingsservice", {
 		}, strPath + "/appstring.json");
 	},
 	onFailure: function(inError) {
-		throw new Error(inError.errorText);
+		LogError("getSystemSettings failure [", "(" + typeof inError.errorCode + ")", inError.errorCode, ", ", inError.errorText, "]");
 	}
 });
 
