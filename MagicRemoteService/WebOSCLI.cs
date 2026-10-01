@@ -219,12 +219,37 @@ namespace MagicRemoteService {
 					strOutput = sbOutput.ToString();
 				}
 				if(pProcess.ExitCode != 0) {
-					MagicRemoteService.Service.Warn("webOS CLI " + strCommand + " failed with exit code " + pProcess.ExitCode + ": " + strErr + " " + strOutput.Trim());
-					// Some ares commands report errors on the standard output, never show an empty message
-					throw new MagicRemoteService.WebOSCLIException(strErr.Length != 0 ? strErr : strOutput.Trim().Length != 0 ? strOutput.Trim() : strCommand + " failed with exit code " + pProcess.ExitCode + ", is the webOS CLI installed and on the PATH?");
+					MagicRemoteService.Service.Warn("webOS CLI " + strCommand + " failed with exit code " + pProcess.ExitCode + " (" + MagicRemoteService.WebOSCLI.DescribeEnvironment(strCommand) + "):\r\n" + strErr + "\r\n" + strOutput.Trim());
+					// Some ares commands report errors on the standard output, never show an empty message. Verbose output goes to the
+					// log only, the message shows the "ERR!" lines when there are some
+					string strMessage = strErr.Length != 0 ? strErr : strOutput.Trim();
+					string[] arrError = System.Array.FindAll(strMessage.Split(new char[] { '\r', '\n' }, System.StringSplitOptions.RemoveEmptyEntries), delegate (string strLine) {
+						return strLine.Contains("ERR!");
+					});
+					throw new MagicRemoteService.WebOSCLIException(arrError.Length != 0 ? string.Join(System.Environment.NewLine, arrError) : strMessage.Length != 0 ? strMessage : strCommand + " failed with exit code " + pProcess.ExitCode + ", is the webOS CLI installed and on the PATH?");
 				}
 				return strOutput;
 			}
+		}
+		// Account, profile folder (where the webOS CLI keeps its device list) and command actually found on the PATH, as a command
+		// can behave differently in the settings window than in a command prompt
+		private static string DescribeEnvironment(string strCommand) {
+			string strWhere;
+			try {
+				using(System.Diagnostics.Process pWhere = new System.Diagnostics.Process()) {
+					pWhere.StartInfo.FileName = "where";
+					pWhere.StartInfo.Arguments = strCommand;
+					pWhere.StartInfo.UseShellExecute = false;
+					pWhere.StartInfo.CreateNoWindow = true;
+					pWhere.StartInfo.RedirectStandardOutput = true;
+					pWhere.Start();
+					strWhere = pWhere.StandardOutput.ReadToEnd().Trim().Replace("\r\n", "; ");
+					pWhere.WaitForExit(5000);
+				}
+			} catch(System.Exception eException) {
+				strWhere = "unknown (" + eException.Message + ")";
+			}
+			return "account " + System.Security.Principal.WindowsIdentity.GetCurrent().Name + ", USERPROFILE " + System.Environment.GetEnvironmentVariable("USERPROFILE") + ", " + strCommand + " found at " + (strWhere.Length == 0 ? "nowhere" : strWhere);
 		}
 		public static MagicRemoteService.WebOSCLIDeviceInput[] InputList() {
 			return new MagicRemoteService.WebOSCLIDeviceInput[] {
@@ -311,6 +336,7 @@ namespace MagicRemoteService {
 		public static void Install(string strDevice, string strPackageFile) {
 			System.Collections.Generic.List<string> tabArgument = new System.Collections.Generic.List<string> {
 				"-d \"" + strDevice + "\"",
+				"-v",
 				"\"" + strPackageFile + "\""
 			};
 			MagicRemoteService.WebOSCLI.ExecWebOSCLICommand("ares-install", string.Join(" ", tabArgument), iTimeout: 300000);
