@@ -30,6 +30,30 @@ namespace MagicRemoteService {
 		public bool LogForwarding;
 		public string TvAppVersion;
 	}
+	// Text message from the TV app, see ProcessTextMessage
+	[System.Runtime.Serialization.DataContract]
+	internal class TVMessage {
+		[System.Runtime.Serialization.DataMember(Name = "t")]
+		public string Type {
+			get; set;
+		}
+		[System.Runtime.Serialization.DataMember(Name = "v")]
+		public string Version {
+			get; set;
+		}
+		[System.Runtime.Serialization.DataMember(Name = "sdk")]
+		public string Sdk {
+			get; set;
+		}
+		[System.Runtime.Serialization.DataMember(Name = "l")]
+		public int? Level {
+			get; set;
+		}
+		[System.Runtime.Serialization.DataMember(Name = "m")]
+		public string Text {
+			get; set;
+		}
+	}
 	public partial class Service : System.ServiceProcess.ServiceBase {
 		// Connection state of this process, shown in the Diagnostics tab
 		private static readonly System.Collections.Generic.List<MagicRemoteService.ConnectionInfo> liConnection = new System.Collections.Generic.List<MagicRemoteService.ConnectionInfo>();
@@ -1017,23 +1041,18 @@ namespace MagicRemoteService {
 		private static string ProcessTextMessage(string strMessage, string strClient, out string strVersion) {
 			strVersion = null;
 			try {
-				using(System.Text.Json.JsonDocument jdMessage = System.Text.Json.JsonDocument.Parse(strMessage)) {
-					System.Text.Json.JsonElement jeRoot = jdMessage.RootElement;
-					string strType = jeRoot.ValueKind == System.Text.Json.JsonValueKind.Object && jeRoot.TryGetProperty("t", out System.Text.Json.JsonElement jeType) && jeType.ValueKind == System.Text.Json.JsonValueKind.String ? jeType.GetString() : null;
-					if(strType == "hello") {
-						strVersion = jeRoot.TryGetProperty("v", out System.Text.Json.JsonElement jeVersion) && jeVersion.ValueKind == System.Text.Json.JsonValueKind.String ? jeVersion.GetString() : "";
-						Service.Log("TV app " + (string.IsNullOrEmpty(strVersion) ? "(unknown version)" : strVersion) + " on socket " + strClient + " supports log forwarding (webOS SDK " + (jeRoot.TryGetProperty("sdk", out System.Text.Json.JsonElement jeSdk) && jeSdk.ValueKind == System.Text.Json.JsonValueKind.String ? jeSdk.GetString() : "?") + ")");
-						return strType;
-					} else if(strType == "log") {
-						int iLevel = jeRoot.TryGetProperty("l", out System.Text.Json.JsonElement jeLevel) && jeLevel.ValueKind == System.Text.Json.JsonValueKind.Number && jeLevel.TryGetInt32(out int iValue) ? iValue : (int)MagicRemoteService.LogLevel.Information;
-						MagicRemoteService.LogLevel llLevel = (MagicRemoteService.LogLevel)System.Math.Max((int)MagicRemoteService.LogLevel.Error, System.Math.Min((int)MagicRemoteService.LogLevel.Debug, iLevel));
-						string strLog = jeRoot.TryGetProperty("m", out System.Text.Json.JsonElement jeLog) && jeLog.ValueKind == System.Text.Json.JsonValueKind.String ? jeLog.GetString() : "";
-						// Only the TV's warnings and errors go to the Event Log, everything goes to the log file
-						MagicRemoteService.Logger.Write(llLevel, "TV " + strClient + ": " + strLog, llLevel <= MagicRemoteService.LogLevel.Warning);
-						return strType;
-					}
+				MagicRemoteService.TVMessage tmMessage = MagicRemoteService.Json.Deserialize<MagicRemoteService.TVMessage>(strMessage);
+				if(tmMessage != null && tmMessage.Type == "hello") {
+					strVersion = tmMessage.Version ?? "";
+					Service.Log("TV app " + (string.IsNullOrEmpty(strVersion) ? "(unknown version)" : strVersion) + " on socket " + strClient + " supports log forwarding (webOS SDK " + (string.IsNullOrEmpty(tmMessage.Sdk) ? "?" : tmMessage.Sdk) + ")");
+					return tmMessage.Type;
+				} else if(tmMessage != null && tmMessage.Type == "log") {
+					MagicRemoteService.LogLevel llLevel = (MagicRemoteService.LogLevel)System.Math.Max((int)MagicRemoteService.LogLevel.Error, System.Math.Min((int)MagicRemoteService.LogLevel.Debug, tmMessage.Level ?? (int)MagicRemoteService.LogLevel.Information));
+					// Only the TV's warnings and errors go to the Event Log, everything goes to the log file
+					MagicRemoteService.Logger.Write(llLevel, "TV " + strClient + ": " + (tmMessage.Text ?? ""), llLevel <= MagicRemoteService.LogLevel.Warning);
+					return tmMessage.Type;
 				}
-			} catch(System.Text.Json.JsonException) {
+			} catch(System.Exception eException) when (MagicRemoteService.Json.IsParseError(eException)) {
 			}
 			Service.Warn("Unprocessed text message on socket " + strClient + " [" + strMessage + "]");
 			return null;
@@ -1562,7 +1581,7 @@ namespace MagicRemoteService {
 													if(strTvAppVersion != Service.AppVersion) {
 														string strNotice = "The TV app version (" + (string.IsNullOrEmpty(strTvAppVersion) ? "unknown" : strTvAppVersion) + ") differs from the PC version (" + Service.AppVersion + "), reinstall the TV app from the PC settings";
 														Service.Warn(strNotice + ", socket " + strClient);
-														Service.TrySend(socClient, Service.FrameText("{\"t\":\"notice\",\"m\":" + System.Text.Json.JsonSerializer.Serialize(strNotice) + "}"), strClient);
+														Service.TrySend(socClient, Service.FrameText("{\"t\":\"notice\",\"m\":" + MagicRemoteService.Json.Serialize(strNotice) + "}"), strClient);
 													}
 													SendLogLevel();
 												}

@@ -1,5 +1,69 @@
 ﻿
 namespace MagicRemoteService {
+	// Settings of the TV app and its service, written to config.js and config.json
+	[System.Runtime.Serialization.DataContract]
+	internal class TVConfig {
+		[System.Runtime.Serialization.DataMember(Name = "debug", Order = 0)]
+		public bool Debug {
+			get; set;
+		}
+		[System.Runtime.Serialization.DataMember(Name = "version", Order = 1)]
+		public string Version {
+			get; set;
+		}
+		[System.Runtime.Serialization.DataMember(Name = "appId", Order = 2)]
+		public string AppId {
+			get; set;
+		}
+		[System.Runtime.Serialization.DataMember(Name = "inputId", Order = 3)]
+		public string InputId {
+			get; set;
+		}
+		[System.Runtime.Serialization.DataMember(Name = "inputAppId", Order = 4)]
+		public string InputAppId {
+			get; set;
+		}
+		[System.Runtime.Serialization.DataMember(Name = "inputName", Order = 5)]
+		public string InputName {
+			get; set;
+		}
+		[System.Runtime.Serialization.DataMember(Name = "inputSource", Order = 6)]
+		public string InputSource {
+			get; set;
+		}
+		[System.Runtime.Serialization.DataMember(Name = "ip", Order = 7)]
+		public string IP {
+			get; set;
+		}
+		[System.Runtime.Serialization.DataMember(Name = "port", Order = 8)]
+		public int Port {
+			get; set;
+		}
+		[System.Runtime.Serialization.DataMember(Name = "mask", Order = 9)]
+		public string Mask {
+			get; set;
+		}
+		[System.Runtime.Serialization.DataMember(Name = "mac", Order = 10)]
+		public string Mac {
+			get; set;
+		}
+		[System.Runtime.Serialization.DataMember(Name = "longClick", Order = 11)]
+		public int LongClick {
+			get; set;
+		}
+		[System.Runtime.Serialization.DataMember(Name = "inputDirect", Order = 12)]
+		public bool InputDirect {
+			get; set;
+		}
+		[System.Runtime.Serialization.DataMember(Name = "overlay", Order = 13)]
+		public bool Overlay {
+			get; set;
+		}
+		[System.Runtime.Serialization.DataMember(Name = "extend", Order = 14)]
+		public bool Extend {
+			get; set;
+		}
+	}
 	public partial class Setting : System.Windows.Forms.Form {
 
 		private static readonly System.Net.IPAddress ipaSendIPDefaut;
@@ -503,30 +567,27 @@ namespace MagicRemoteService {
 			System.IO.Directory.CreateDirectory(strTVDir + @"\Service\WebSocket");
 
 			// The TV app and its service read their settings from these files instead of having them replaced in their code
-			System.Collections.Generic.Dictionary<string, object> dConfig = new System.Collections.Generic.Dictionary<string, object>() {
+			string strConfig = MagicRemoteService.Json.Serialize(new MagicRemoteService.TVConfig {
 #if DEBUG
-				{ "debug", true },
+				Debug = true,
 #else
-				{ "debug", false },
+				Debug = false,
 #endif
-				{ "version", strVersion },
-				{ "appId", "com.cathwyler.magicremoteservice." + wocdiInput.AppIdShort },
-				{ "inputId", wocdiInput.Id },
-				{ "inputAppId", "com.webos.app." + wocdiInput.AppIdShort },
-				{ "inputName", wocdiInput.Name },
-				{ "inputSource", wocdiInput.Source },
-				{ "ip", ipaSendIP.ToString() },
-				{ "port", (int)dSendPort },
-				{ "mask", ipaMask.ToString() },
-				{ "mac", paPCMac.ToString() },
-				{ "longClick", (int)dLongClick },
-				{ "inputDirect", bInputDirect },
-				{ "overlay", bOverlay },
-				{ "extend", bExtend }
-			};
-			string strConfig = System.Text.Json.JsonSerializer.Serialize(dConfig, new System.Text.Json.JsonSerializerOptions {
-				WriteIndented = true
-			});
+				Version = strVersion,
+				AppId = "com.cathwyler.magicremoteservice." + wocdiInput.AppIdShort,
+				InputId = wocdiInput.Id,
+				InputAppId = "com.webos.app." + wocdiInput.AppIdShort,
+				InputName = wocdiInput.Name,
+				InputSource = wocdiInput.Source,
+				IP = ipaSendIP.ToString(),
+				Port = (int)dSendPort,
+				Mask = ipaMask.ToString(),
+				Mac = paPCMac.ToString(),
+				LongClick = (int)dLongClick,
+				InputDirect = bInputDirect,
+				Overlay = bOverlay,
+				Extend = bExtend
+			}, true);
 			System.IO.File.WriteAllText(strTVDir + @"\MagicRemoteService\config.js", "var oMagicRemoteServiceConfig = " + strConfig + ";\r\n");
 			System.IO.File.WriteAllText(strTVDir + @"\Service\config.json", strConfig);
 			System.IO.File.WriteAllText(strTVDir + @"\MagicRemoteService\main.js", MagicRemoteService.Properties.Resources.main);

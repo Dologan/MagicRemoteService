@@ -10,28 +10,6 @@ namespace MagicRemoteService {
 		public WebOSCLIException(string strMessage, System.Exception eInner) : base(strMessage, eInner) {
 		}
 	}
-	public class IPAddressJsonConverter : System.Text.Json.Serialization.JsonConverter<System.Net.IPAddress> {
-		public override bool CanConvert(System.Type objectType) {
-			return objectType == typeof(System.Net.IPAddress);
-		}
-		public override System.Net.IPAddress Read(ref System.Text.Json.Utf8JsonReader reader, System.Type typeToConvert, System.Text.Json.JsonSerializerOptions options) {
-			return System.Net.IPAddress.Parse(reader.GetString());
-		}
-		public override void Write(System.Text.Json.Utf8JsonWriter writer, System.Net.IPAddress value, System.Text.Json.JsonSerializerOptions serializer) {
-			writer.WriteStringValue(value.ToString());
-		}
-	}
-	public class UShortJsonConverter : System.Text.Json.Serialization.JsonConverter<ushort> {
-		public override bool CanConvert(System.Type objectType) {
-			return objectType == typeof(ushort);
-		}
-		public override ushort Read(ref System.Text.Json.Utf8JsonReader reader, System.Type typeToConvert, System.Text.Json.JsonSerializerOptions options) {
-			return ushort.Parse(reader.GetString());
-		}
-		public override void Write(System.Text.Json.Utf8JsonWriter writer, ushort value, System.Text.Json.JsonSerializerOptions options) {
-			writer.WriteStringValue(value.ToString());
-		}
-	}
 	public class WebOSCLIDeviceInput {
 		public string Id {
 			get; set;
@@ -46,101 +24,131 @@ namespace MagicRemoteService {
 			get; set;
 		}
 	}
+	// The webOS CLI writes the address and the port as strings
+	[System.Runtime.Serialization.DataContract]
 	public class WebOSCLIDeviceInfo {
-		[System.Text.Json.Serialization.JsonConverter(typeof(MagicRemoteService.IPAddressJsonConverter))]
-		[System.Text.Json.Serialization.JsonPropertyName("ip")]
 		public System.Net.IPAddress IP {
 			get; set;
 		}
-		[System.Text.Json.Serialization.JsonConverter(typeof(MagicRemoteService.UShortJsonConverter))]
-		[System.Text.Json.Serialization.JsonPropertyName("port")]
+		[System.Runtime.Serialization.DataMember(Name = "ip")]
+		private string JsonIP {
+			get {
+				return this.IP?.ToString();
+			}
+			set {
+				this.IP = value == null ? null : System.Net.IPAddress.Parse(value);
+			}
+		}
 		public ushort Port {
 			get; set;
 		}
-		[System.Text.Json.Serialization.JsonPropertyName("user")]
+		[System.Runtime.Serialization.DataMember(Name = "port")]
+		private string JsonPort {
+			get {
+				return this.Port.ToString();
+			}
+			set {
+				this.Port = ushort.Parse(value);
+			}
+		}
+		[System.Runtime.Serialization.DataMember(Name = "user")]
 		public string User {
 			get; set;
 		}
 	}
+	[System.Runtime.Serialization.DataContract]
 	public class WebOSCLIDeviceDetail {
-		[System.Text.Json.Serialization.JsonPropertyName("platform")]
+		[System.Runtime.Serialization.DataMember(Name = "platform")]
 		public string Platform {
 			get; set;
 		}
-		[System.Text.Json.Serialization.JsonPropertyName("privatekey")]
+		[System.Runtime.Serialization.DataMember(Name = "privatekey")]
 		public string PrivateKey {
 			get; set;
 		}
-		[System.Text.Json.Serialization.JsonPropertyName("passphrase")]
+		[System.Runtime.Serialization.DataMember(Name = "passphrase")]
 		public string Passphrase {
 			get; set;
 		}
-		[System.Text.Json.Serialization.JsonPropertyName("description")]
+		[System.Runtime.Serialization.DataMember(Name = "description")]
 		public string Description {
 			get; set;
 		}
 	}
+	[System.Runtime.Serialization.DataContract]
 	public class WebOSCLIDevice {
-
-		[System.Text.Json.Serialization.JsonPropertyName("profile")]
+		[System.Runtime.Serialization.DataMember(Name = "profile")]
 		public string Profile {
 			get; set;
 		}
-		[System.Text.Json.Serialization.JsonPropertyName("name")]
+		[System.Runtime.Serialization.DataMember(Name = "name")]
 		public string Name {
 			get; set;
 		}
-		[System.Text.Json.Serialization.JsonPropertyName("default")]
+		[System.Runtime.Serialization.DataMember(Name = "default")]
 		public bool Default {
 			get; set;
 		}
-		[System.Text.Json.Serialization.JsonPropertyName("deviceinfo")]
+		[System.Runtime.Serialization.DataMember(Name = "deviceinfo")]
 		public MagicRemoteService.WebOSCLIDeviceInfo DeviceInfo {
 			get; set;
 		}
-		[System.Text.Json.Serialization.JsonPropertyName("connection")]
+		[System.Runtime.Serialization.DataMember(Name = "connection")]
 		public string[] Connection {
 			get; set;
 		}
-		[System.Text.Json.Serialization.JsonPropertyName("details")]
+		[System.Runtime.Serialization.DataMember(Name = "details")]
 		public MagicRemoteService.WebOSCLIDeviceDetail DeviceDetail {
 			get; set;
 		}
 	}
-
+	[System.Runtime.Serialization.DataContract]
 	internal class WebOSCLIDeviceSet {
-
-		[System.Text.Json.Serialization.JsonPropertyName("name")]
+		[System.Runtime.Serialization.DataMember(Name = "name")]
 		public string Name {
 			get; set;
 		}
-		[System.Text.Json.Serialization.JsonPropertyName("description")]
+		[System.Runtime.Serialization.DataMember(Name = "description")]
 		public string Description {
 			get; set;
 		}
-		[System.Text.Json.Serialization.JsonConverter(typeof(MagicRemoteService.IPAddressJsonConverter))]
-		[System.Text.Json.Serialization.JsonPropertyName("host")]
 		public System.Net.IPAddress IP {
 			get; set;
 		}
-		[System.Text.Json.Serialization.JsonConverter(typeof(MagicRemoteService.UShortJsonConverter))]
-		[System.Text.Json.Serialization.JsonPropertyName("port")]
+		[System.Runtime.Serialization.DataMember(Name = "host")]
+		private string JsonIP {
+			get {
+				return this.IP?.ToString();
+			}
+			set {
+				this.IP = value == null ? null : System.Net.IPAddress.Parse(value);
+			}
+		}
 		public ushort Port {
 			get; set;
 		}
-		[System.Text.Json.Serialization.JsonPropertyName("username")]
+		[System.Runtime.Serialization.DataMember(Name = "port")]
+		private string JsonPort {
+			get {
+				return this.Port.ToString();
+			}
+			set {
+				this.Port = ushort.Parse(value);
+			}
+		}
+		[System.Runtime.Serialization.DataMember(Name = "username")]
 		public string User {
 			get; set;
 		}
-		[System.Text.Json.Serialization.JsonPropertyName("password")]
+		[System.Runtime.Serialization.DataMember(Name = "password")]
 		public string Password {
 			get; set;
 		}
-		[System.Text.Json.Serialization.JsonPropertyName("privatekey")]
+		[System.Runtime.Serialization.DataMember(Name = "privatekey")]
 		public string PrivateKey {
 			get; set;
 		}
-		[System.Text.Json.Serialization.JsonPropertyName("passphrase")]
+		[System.Runtime.Serialization.DataMember(Name = "passphrase")]
 		public string Passphrase {
 			get; set;
 		}
@@ -259,16 +267,40 @@ namespace MagicRemoteService {
 				new MagicRemoteService.WebOSCLIDeviceInput() { Id = "HDMI_4", Name = "HDMI 4", Source = "ext://hdmi:4", AppIdShort = "hdmi4" }
 			};
 		}
+		// The JSON goes through cmd in double quotes, so ares-setup-device takes it with single quotes, which it turns back into double quotes.
+		// Quotes inside values, "%" (expanded by cmd) and non-ASCII characters (changed by the console code page) are escaped as \uXXXX
+		private static string DeviceSetArgument(MagicRemoteService.WebOSCLIDeviceSet wocdsDevice) {
+			string strJson = MagicRemoteService.Json.Serialize(wocdsDevice);
+			System.Text.StringBuilder sbArgument = new System.Text.StringBuilder(strJson.Length);
+			for(int i = 0; i < strJson.Length; i++) {
+				char c = strJson[i];
+				if(c == '\\' && i + 1 < strJson.Length) {
+					if(strJson[i + 1] == '"') {
+						sbArgument.Append("\\u0022");
+					} else {
+						sbArgument.Append(c).Append(strJson[i + 1]);
+					}
+					i++;
+				} else if(c == '"') {
+					sbArgument.Append('\'');
+				} else if(c == '\'' || c == '%' || c < 0x20 || c > 0x7E) {
+					sbArgument.Append("\\u").Append(((int)c).ToString("x4"));
+				} else {
+					sbArgument.Append(c);
+				}
+			}
+			return sbArgument.ToString();
+		}
 		public static MagicRemoteService.WebOSCLIDevice[] SetupDeviceList() {
 			System.Collections.Generic.List<string> tabArgument = new System.Collections.Generic.List<string> {
 				"-F"
 			};
-			return System.Text.Json.JsonSerializer.Deserialize<MagicRemoteService.WebOSCLIDevice[]>(MagicRemoteService.WebOSCLI.ExecWebOSCLICommand("ares-setup-device", string.Join(" ", tabArgument)));
+			return MagicRemoteService.Json.Deserialize<MagicRemoteService.WebOSCLIDevice[]>(MagicRemoteService.WebOSCLI.ExecWebOSCLICommand("ares-setup-device", string.Join(" ", tabArgument)));
 		}
 		public static void SetupDeviceAdd(MagicRemoteService.WebOSCLIDevice wocdDevice, string strPassword) {
 			System.Collections.Generic.List<string> tabArgument = new System.Collections.Generic.List<string> {
 				"-a \"" + wocdDevice.Name + "\"",
-				"-i \"" + System.Text.Json.JsonSerializer.Serialize<MagicRemoteService.WebOSCLIDeviceSet>(new MagicRemoteService.WebOSCLIDeviceSet {
+				"-i \"" + MagicRemoteService.WebOSCLI.DeviceSetArgument(new MagicRemoteService.WebOSCLIDeviceSet {
 					Name = wocdDevice.Name,
 					Description = wocdDevice.DeviceDetail.Description,
 					IP = wocdDevice.DeviceInfo.IP,
@@ -277,14 +309,14 @@ namespace MagicRemoteService {
 					Password = strPassword,
 					PrivateKey = wocdDevice.DeviceDetail.PrivateKey,
 					Passphrase = wocdDevice.DeviceDetail.Passphrase
-				}).Replace("\"", "'") + "\""
+				}) + "\""
 			};
 			MagicRemoteService.WebOSCLI.ExecWebOSCLICommand("ares-setup-device", string.Join(" ", tabArgument));
 		}
 		public static void SetupDeviceModify(string strDevice, MagicRemoteService.WebOSCLIDevice wocdDevice, string strPassword) {
 			System.Collections.Generic.List<string> tabArgument = new System.Collections.Generic.List<string> {
 				"-m \"" + strDevice + "\"",
-				"-i \"" + System.Text.Json.JsonSerializer.Serialize<MagicRemoteService.WebOSCLIDeviceSet>(new MagicRemoteService.WebOSCLIDeviceSet {
+				"-i \"" + MagicRemoteService.WebOSCLI.DeviceSetArgument(new MagicRemoteService.WebOSCLIDeviceSet {
 					Name = wocdDevice.Name,
 					Description = wocdDevice.DeviceDetail.Description,
 					IP = wocdDevice.DeviceInfo.IP,
@@ -293,7 +325,7 @@ namespace MagicRemoteService {
 					Password = strPassword,
 					PrivateKey = wocdDevice.DeviceDetail.PrivateKey,
 					Passphrase = wocdDevice.DeviceDetail.Passphrase
-				}).Replace("\"", "'") + "\""
+				}) + "\""
 			};
 			MagicRemoteService.WebOSCLI.ExecWebOSCLICommand("ares-setup-device", string.Join(" ", tabArgument));
 		}
